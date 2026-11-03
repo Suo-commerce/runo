@@ -79,7 +79,8 @@ pub enum Decision {
 }
 
 /// Task lifecycle as the store knows it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TaskState {
     /// Grants may be issued.
     Open,

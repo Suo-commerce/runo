@@ -63,6 +63,76 @@ enum Cmd {
     },
     /// The owner's view.
     View,
+    /// The chorus's store.
+    Store {
+        #[command(subcommand)]
+        cmd: StoreCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum StoreCmd {
+    /// Own the chorus's jsonl store and serve it to nodes and commands; one per chorus.
+    Serve {
+        /// The chorus directory (created if missing).
+        #[arg(long)]
+        dir: std::path::PathBuf,
+        /// The Unix socket to serve on [default: <dir>/store.sock].
+        #[arg(long)]
+        socket: Option<std::path::PathBuf>,
+        /// Also serve TCP on this address; bind it to the chorus's private network only.
+        #[arg(long)]
+        tcp: Option<String>,
+        /// `host` (fsync before acknowledging) or `process`.
+        #[arg(long, default_value = "host")]
+        durability: String,
+    },
+}
+
+/// `runo store serve`: open the backend, then serve until stopped.
+fn store_serve(
+    dir: &std::path::Path,
+    socket: Option<std::path::PathBuf>,
+    tcp: Option<String>,
+    durability: &str,
+) -> Result<(), String> {
+    use runo_core::fence::Durability;
+    use runo_store::service::{bind_unix, serve_tcp, serve_unix};
+    use std::sync::Arc;
+
+    let level = match durability {
+        "host" => Durability::Host,
+        "process" => Durability::Process,
+        other => return Err(format!("durability must be host or process, not {other}")),
+    };
+    let store =
+        runo_store::jsonl::JsonlStore::open(dir, runo_core::ResourceId("song".into()), level)
+            .map_err(|e| e.to_string())?;
+    let store: Arc<dyn runo_store::SongStore> = Arc::new(store);
+    let socket = socket.unwrap_or_else(|| dir.join("store.sock"));
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async move {
+        let unix = bind_unix(&socket).map_err(|e| e.to_string())?;
+        println!("runo store: {} on {}", dir.display(), socket.display());
+        let tcp_task = match tcp {
+            Some(addr) => {
+                let listener = tokio::net::TcpListener::bind(&addr)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                println!("runo store: also on tcp {addr}");
+                Some(tokio::spawn(serve_tcp(Arc::clone(&store), listener)))
+            }
+            None => None,
+        };
+        tokio::select! {
+            r = serve_unix(store, unix) => r.map_err(|e| e.to_string()),
+            _ = tokio::signal::ctrl_c() => {
+                if let Some(t) = tcp_task { t.abort(); }
+                let _ = std::fs::remove_file(&socket);
+                Ok(())
+            }
+        }
+    })
 }
 
 fn main() {
@@ -73,6 +143,20 @@ fn main() {
         }
         Cmd::Doctor => {
             println!("runo doctor: nothing configured yet; every default will be printed here");
+        }
+        Cmd::Store {
+            cmd:
+                StoreCmd::Serve {
+                    dir,
+                    socket,
+                    tcp,
+                    durability,
+                },
+        } => {
+            if let Err(e) = store_serve(&dir, socket, tcp, &durability) {
+                eprintln!("runo store serve: {e}");
+                std::process::exit(3);
+            }
         }
         other => println!(
             "{other:?}: not yet implemented; see the technical specification §14 for its milestone"

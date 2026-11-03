@@ -14,9 +14,10 @@ pub use runo_core::fence::{Durability, Fence, FenceAck};
 pub use runo_core::ingress::RecordClass;
 use runo_core::ingress::TaskState;
 use runo_core::{Epoch, Hash, Refrain, SingerId, TaskId, Verse, VerseId};
+use serde::{Deserialize, Serialize};
 
 /// Proof an append happened at the requested level.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Receipt {
     /// The verse appended.
     pub id: VerseId,
@@ -25,7 +26,7 @@ pub struct Receipt {
 }
 
 /// A read cursor over the store.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Serialize, Deserialize)]
 pub struct Cursor(pub u64);
 
 /// What a read returns: the verse exactly as sung, plus what this store knows about it
@@ -34,7 +35,7 @@ pub struct Cursor(pub u64);
 /// The class is persisted per route beside the unchanged verse bytes (in jsonl, a wrapper object
 /// per line: `{"class": "history", "verse": …}`), so a reader's observer skips `History` for live
 /// clocks and the scribe finds addenda.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Record {
     /// The verse, byte for byte as admitted.
     pub verse: Verse,
@@ -45,7 +46,7 @@ pub struct Record {
 }
 
 /// Head of one chain.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Head {
     /// Epoch.
     pub epoch: Epoch,
