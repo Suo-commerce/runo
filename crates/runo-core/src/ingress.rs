@@ -1,7 +1,25 @@
 //! The one pipeline every verse passes (technical spec §4). Pure: takes the verse, the roster
 //! history and a view of the store, and returns a decision. The node applies it.
 
+use serde::{Deserialize, Serialize};
+
 use crate::types::{ChainKey, RosterDoc, RosterVersion, SingerId, TaskId, Verse, VerseId};
+
+/// How the store classified a record on admission (technical spec §7).
+///
+/// Persisted beside the verse's unchanged bytes; the signed bytes themselves never carry local
+/// state. The class follows the route the verse was first admitted on, and storage deduplication
+/// never erases it: a byte-identical re-admission returns [`Decision::Stored`] with this class.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordClass {
+    /// Current work on the chain (`append` or `append_fenced`): drives live clocks.
+    Current,
+    /// Historical evidence (`archive`): kept unchanged, no effects, skipped by live clocks.
+    History,
+    /// Allocator record on a closed task (`record`): `Close`, `Tome`, `Addendum`.
+    Control,
+}
 
 /// Why a verse was rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,8 +54,13 @@ pub enum Decision {
         /// The other variant, if this is a fork.
         fork_of: Option<VerseId>,
     },
-    /// Byte-identical verse already in storage. Observable once per node, never appended twice.
-    Stored,
+    /// Byte-identical verse already in storage, under the class it was first admitted with.
+    /// Observable once per node, never appended twice; a `History` class is observed as history,
+    /// never as live.
+    Stored {
+        /// The class the store persisted on first admission.
+        class: RecordClass,
+    },
     /// Held until the named verses are known.
     Pending {
         /// Missing `prev`, `cause`, `grant` or activation.
@@ -64,8 +87,11 @@ pub enum TaskState {
 
 /// What ingress needs to know about the store, without I/O.
 pub trait StoreView {
-    /// Is this verse already stored, byte for byte?
-    fn has_exact(&self, id: &VerseId) -> bool;
+    /// The persisted class of this verse if it is already stored, byte for byte.
+    ///
+    /// Ingress reads the class rather than deciding one (step 2), so a re-admitted record keeps
+    /// whatever it was first admitted as.
+    fn stored_class(&self, id: &VerseId) -> Option<RecordClass>;
     /// Fetch a verse by id, if known.
     fn get(&self, id: &VerseId) -> Option<Verse>;
     /// Other variants stored under the same chain key and seq.
@@ -93,4 +119,27 @@ pub trait RosterHistory {
 #[must_use]
 pub fn admit(_verse: &Verse, _rosters: &dyn RosterHistory, _view: &dyn StoreView) -> Decision {
     todo!("milestone 2: runo-core ingress")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecordClass;
+
+    /// The class is persisted beside the verse as a lowercase name (`{"class": "history", …}`),
+    /// in jsonl and in the canonical encoding alike.
+    #[test]
+    fn record_class_is_a_lowercase_name_on_the_wire() {
+        for (class, name) in [
+            (RecordClass::Current, "current"),
+            (RecordClass::History, "history"),
+            (RecordClass::Control, "control"),
+        ] {
+            let mut bytes = Vec::new();
+            ciborium::into_writer(&class, &mut bytes).expect("encode");
+            let decoded: String = ciborium::from_reader(bytes.as_slice()).expect("a text string");
+            assert_eq!(decoded, name);
+            let back: RecordClass = ciborium::from_reader(bytes.as_slice()).expect("decode");
+            assert_eq!(back, class);
+        }
+    }
 }

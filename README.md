@@ -21,9 +21,10 @@ Until the Rust `diagnose` exists, the Python kit in `runo-replay/` is tier 1.
 
 ## Documents
 
-- The Dwarven Song: Specification v3 — the protocol (`docs/song-spec.md` once exported)
-- Runo Core: Technical Specification — the build plan (`docs/tech-spec.md` once exported)
-- Runo Replay Report — the evidence from two pipelines (`docs/replay-report.md` once exported)
+- The Dwarven Song: Specification v3 — the protocol (`docs/song-spec.md`)
+- Runo Core: Technical Specification — the build plan (`docs/tech-spec.md`)
+- Runo Replay Report — the evidence from the HODD Bob pipeline (`docs/replay-report.md`)
+- Runo Against the HODD Bob Post-Mortem — the 27 anti-patterns mapped (`docs/post-mortem-mapping.md`)
 
 ## Workspace
 
@@ -42,7 +43,7 @@ crates/runo-node      the voice runtime: sing, refrain, probe, ladder
 crates/runo-scribe    closure snapshots, tomes, Merkle roots, addenda
 crates/runo-adapter-paperclip   the herald: Paperclip signals as peer verses
 crates/runo-testkit   builders, fixture chorus, SimClock, conformance macros (dev only)
-crates/runo-sim       the fourteen scenarios under a deterministic simulator
+crates/runo-sim       the fifteen scenarios under a deterministic simulator
 crates/runo-cli       the runo binary
 model/                TLA+ model of claim, grant, activation, close, seal
 profiles/             example profiles and chorus manifest

@@ -1,0 +1,3 @@
+# close-crash
+description = "The allocator crashes between persisting the closure snapshot hash and publishing Close; a late signed fork enters the archive before restart. Must hold: the published snapshot equals the persisted one byte for byte; the late fork is an addendum, not part of the snapshot; Close is published exactly once."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

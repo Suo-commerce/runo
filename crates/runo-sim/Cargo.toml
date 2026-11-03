@@ -1,6 +1,6 @@
     [package]
     name = "runo-sim"
-    description = "Deterministic simulation harness and the fourteen scenarios."
+    description = "Deterministic simulation harness and the fifteen scenarios."
     version.workspace = true
     edition.workspace = true
     license.workspace = true
