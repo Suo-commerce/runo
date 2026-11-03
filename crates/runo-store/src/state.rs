@@ -486,3 +486,31 @@ impl IngressView for State {
         self.activated.contains(grant)
     }
 }
+
+/// `IngressView` for a backend that keeps a [`State`] behind a lock: `$lock` is a method on the
+/// backend returning something that derefs to `State`. One delegation, every backend.
+macro_rules! ingress_view_via_state {
+    ($ty:ty, $lock:ident) => {
+        impl runo_core::ingress::IngressView for $ty {
+            fn stored_class(&self, id: &VerseId) -> Option<RecordClass> {
+                runo_core::ingress::IngressView::stored_class(&*self.$lock(), id)
+            }
+            fn get(&self, id: &VerseId) -> Option<Verse> {
+                runo_core::ingress::IngressView::get(&*self.$lock(), id)
+            }
+            fn variants(&self, key: &ChainKey, seq: u64) -> Vec<VerseId> {
+                runo_core::ingress::IngressView::variants(&*self.$lock(), key, seq)
+            }
+            fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Option<Epoch> {
+                runo_core::ingress::IngressView::installed_fence(&*self.$lock(), singer, task)
+            }
+            fn task_state(&self, task: &TaskId) -> TaskState {
+                runo_core::ingress::IngressView::task_state(&*self.$lock(), task)
+            }
+            fn has_activation(&self, grant: &VerseId) -> bool {
+                runo_core::ingress::IngressView::has_activation(&*self.$lock(), grant)
+            }
+        }
+    };
+}
+pub(crate) use ingress_view_via_state;

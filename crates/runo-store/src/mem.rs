@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use runo_core::fence::{Durability, Fence, FenceAck};
-use runo_core::ingress::{IngressView, RecordClass, TaskState};
+use runo_core::ingress::{RecordClass, TaskState};
 use runo_core::{ChainKey, Epoch, Hash, Refrain, ResourceId, SingerId, TaskId, Verse, VerseId};
 
 use crate::state::{Prepared, State};
@@ -194,23 +194,4 @@ impl ScribeRead for MemStore {
     }
 }
 
-impl IngressView for MemStore {
-    fn stored_class(&self, id: &VerseId) -> Option<RecordClass> {
-        self.lock().stored_class(id)
-    }
-    fn get(&self, id: &VerseId) -> Option<Verse> {
-        IngressView::get(&*self.lock(), id)
-    }
-    fn variants(&self, key: &ChainKey, seq: u64) -> Vec<VerseId> {
-        self.lock().variants(key, seq)
-    }
-    fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Option<Epoch> {
-        IngressView::installed_fence(&*self.lock(), singer, task)
-    }
-    fn task_state(&self, task: &TaskId) -> TaskState {
-        self.lock().task_state(task)
-    }
-    fn has_activation(&self, grant: &VerseId) -> bool {
-        self.lock().has_activation(grant)
-    }
-}
+crate::state::ingress_view_via_state!(MemStore, lock);

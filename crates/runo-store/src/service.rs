@@ -263,9 +263,7 @@ where
 /// Accept failures.
 pub async fn serve_unix(store: Arc<dyn SongStore>, listener: UnixListener) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
-        let store = Arc::clone(&store);
-        tokio::spawn(async move { serve_connection(store, stream).await });
+        spawn(&store, listener.accept().await?.0);
     }
 }
 
@@ -276,10 +274,16 @@ pub async fn serve_unix(store: Arc<dyn SongStore>, listener: UnixListener) -> st
 /// Accept failures.
 pub async fn serve_tcp(store: Arc<dyn SongStore>, listener: TcpListener) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
-        let store = Arc::clone(&store);
-        tokio::spawn(async move { serve_connection(store, stream).await });
+        spawn(&store, listener.accept().await?.0);
     }
+}
+
+fn spawn<S>(store: &Arc<dyn SongStore>, stream: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let store = Arc::clone(store);
+    tokio::spawn(async move { serve_connection(store, stream).await });
 }
 
 /// Bind a Unix socket at `path`, replacing a socket file left by an earlier run. The backend's

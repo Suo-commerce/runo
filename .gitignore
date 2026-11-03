@@ -10,3 +10,4 @@
 model/states/
 model/*_TTrace_*.tla
 model/tla2tools.jar
+__pycache__/

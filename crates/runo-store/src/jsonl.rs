@@ -22,7 +22,7 @@ use std::sync::{Mutex, MutexGuard};
 use async_trait::async_trait;
 use runo_core::fence::{Durability, Fence, FenceAck};
 use runo_core::hash::display;
-use runo_core::ingress::{IngressView, RecordClass, TaskState};
+use runo_core::ingress::{RecordClass, TaskState};
 use runo_core::{ChainKey, Epoch, Hash, Refrain, ResourceId, SingerId, TaskId, Verse, VerseId};
 use serde::{Deserialize, Serialize};
 
@@ -401,23 +401,20 @@ impl ScribeRead for JsonlStore {
     }
 }
 
-impl IngressView for JsonlStore {
-    fn stored_class(&self, id: &VerseId) -> Option<RecordClass> {
-        self.lock().state.stored_class(id)
-    }
-    fn get(&self, id: &VerseId) -> Option<Verse> {
-        IngressView::get(&self.lock().state, id)
-    }
-    fn variants(&self, key: &ChainKey, seq: u64) -> Vec<VerseId> {
-        self.lock().state.variants(key, seq)
-    }
-    fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Option<Epoch> {
-        IngressView::installed_fence(&self.lock().state, singer, task)
-    }
-    fn task_state(&self, task: &TaskId) -> TaskState {
-        self.lock().state.task_state(task)
-    }
-    fn has_activation(&self, grant: &VerseId) -> bool {
-        self.lock().state.has_activation(grant)
+/// The shared state, for `IngressView`.
+impl JsonlStore {
+    fn state(&self) -> MappedState<'_> {
+        MappedState(self.lock())
     }
 }
+
+struct MappedState<'a>(MutexGuard<'a, Inner>);
+
+impl std::ops::Deref for MappedState<'_> {
+    type Target = State;
+    fn deref(&self) -> &State {
+        &self.0.state
+    }
+}
+
+crate::state::ingress_view_via_state!(JsonlStore, state);
