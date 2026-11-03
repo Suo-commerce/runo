@@ -50,7 +50,19 @@ pub enum Observation<'a> {
 }
 
 /// Suspicion level per clock.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
     /// Nothing overdue.
     #[default]
@@ -100,7 +112,8 @@ pub struct Escalation {
 }
 
 /// Why a clock went back to `Quiet`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Cleared {
     /// New progress (`Progress`), a fresh refrain or verse (`Reachability`), a cleared block
     /// (`Waiting`).

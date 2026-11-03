@@ -2,6 +2,7 @@
 //! Everything outside the process goes through a trait, so a node runs unchanged under the simulator.
 
 pub mod channel;
+pub mod episodes;
 
 use async_trait::async_trait;
 use runo_core::{Clock, Epoch, SingerId, TaskId};

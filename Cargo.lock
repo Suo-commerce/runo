@@ -714,6 +714,7 @@ version = "0.1.0"
 dependencies = [
  "runo-cadence",
  "runo-core",
+ "serde",
  "thiserror",
 ]
 
@@ -751,6 +752,8 @@ dependencies = [
  "runo-fence",
  "runo-profile",
  "runo-store",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
