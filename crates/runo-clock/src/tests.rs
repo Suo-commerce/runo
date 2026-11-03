@@ -152,7 +152,10 @@ fn row_clock(c: &Chorus, now: Instant, clock: usize) -> ClockState {
 fn silence_climbs_the_ladder_once_per_level() {
     let mut c = Chorus::new(config(false));
     see(&mut c, at(0), &claimed("a", 1, true));
-    assert!(c.tick(at(29)).is_empty());
+    assert!(
+        c.tick(at(29)).is_empty(),
+        "nothing is due before the first threshold"
+    );
     let e = c.tick(at(30));
     assert_eq!(levels(&e, Clock::Progress), [Level::Crossed]);
     assert!(
@@ -166,7 +169,7 @@ fn silence_climbs_the_ladder_once_per_level() {
     );
     let last = e.iter().rfind(|x| x.clock == Clock::Progress).unwrap();
     assert_eq!(last.overdue_by, Millis(60_000));
-    assert!(c.tick(at(500)).is_empty());
+    assert!(c.tick(at(500)).is_empty(), "the top level is reached once");
 }
 
 #[test]
@@ -184,7 +187,10 @@ fn progress_resolves_and_restarts_the_progress_clock_only() {
             why: Cleared::Evidence
         }]
     );
-    assert!(levels(&c.tick(at(69)), Clock::Progress).is_empty());
+    assert!(
+        levels(&c.tick(at(69)), Clock::Progress).is_empty(),
+        "progress restarted at 40, so nothing is due before 70"
+    );
     assert_eq!(levels(&c.tick(at(70)), Clock::Progress), [Level::Crossed]);
     // The task clock never resets within an epoch: it kept climbing and is Called by now.
     assert!(matches!(
@@ -217,8 +223,14 @@ fn an_overdue_wait_escalates_waiting_only() {
     );
     let e = c.tick(at(40));
     assert_eq!(levels(&e, Clock::Waiting), [Level::Crossed]);
-    assert!(levels(&e, Clock::Progress).is_empty());
-    assert!(levels(&e, Clock::Task).is_empty());
+    assert!(
+        levels(&e, Clock::Progress).is_empty(),
+        "progress does not escalate while waiting"
+    );
+    assert!(
+        levels(&e, Clock::Task).is_empty(),
+        "the task clock is paused while waiting"
+    );
     let r = &c.rows(at(40))[0];
     assert_eq!(r.blocked_on.as_deref(), Some("review by jarmo"));
     assert_eq!(
@@ -245,7 +257,10 @@ fn an_overdue_wait_escalates_waiting_only() {
             why: Cleared::Evidence
         }]
     );
-    assert!(levels(&c.tick(at(119)), Clock::Task).is_empty());
+    assert!(
+        levels(&c.tick(at(119)), Clock::Task).is_empty(),
+        "the wait paused the task clock"
+    );
     assert_eq!(levels(&c.tick(at(120)), Clock::Task), [Level::Crossed]);
     assert_eq!(row_clock(&c, at(120), 3), ClockState::Idle);
 }
@@ -255,7 +270,10 @@ fn watch_mode_shows_reachability_unknown_and_never_escalates_it() {
     let mut c = Chorus::new(config(false));
     see(&mut c, at(0), &claimed("a", 1, true));
     let e = c.tick(at(1000));
-    assert!(levels(&e, Clock::Reachability).is_empty());
+    assert!(
+        levels(&e, Clock::Reachability).is_empty(),
+        "watch mode never escalates reachability"
+    );
     assert_eq!(row_clock(&c, at(1000), 0), ClockState::Unknown);
 }
 
@@ -393,8 +411,14 @@ fn a_terminal_boundary_completes_and_the_row_leaves_the_view() {
         r.iter()
             .any(|x| x.clock == Clock::Task && x.why == Cleared::Completed)
     );
-    assert!(c.rows(at(40)).is_empty());
-    assert!(c.tick(at(500)).is_empty());
+    assert!(
+        c.rows(at(40)).is_empty(),
+        "a completed task leaves the view"
+    );
+    assert!(
+        c.tick(at(500)).is_empty(),
+        "a completed task never escalates"
+    );
 }
 
 #[test]
@@ -403,7 +427,10 @@ fn a_newer_epoch_relaunches_and_an_older_one_is_ignored() {
     see(&mut c, at(0), &claimed("a", 2, true));
     c.tick(at(30));
     see(&mut c, at(35), &claimed("a", 1, true));
-    assert!(c.take_resolutions().is_empty());
+    assert!(
+        c.take_resolutions().is_empty(),
+        "an older epoch is not a relaunch"
+    );
     see(&mut c, at(40), &claimed("a", 3, true));
     let r = c.take_resolutions();
     assert!(r.iter().all(|x| x.why == Cleared::Relaunched));
@@ -434,7 +461,10 @@ fn an_owner_ruling_resolves_and_anyone_elses_does_not() {
         )
     };
     see(&mut c, at(31), &ruling("b"));
-    assert!(c.take_resolutions().is_empty());
+    assert!(
+        c.take_resolutions().is_empty(),
+        "only the owner's ruling resolves"
+    );
     see(&mut c, at(32), &ruling("owner"));
     assert!(c.take_resolutions().iter().all(|x| x.why == Cleared::Ruled));
 }
@@ -444,7 +474,10 @@ fn a_promise_without_checkpoints_has_no_progress_clock() {
     let mut c = Chorus::new(config(false));
     see(&mut c, at(0), &claimed("a", 1, false));
     let e = c.tick(at(30));
-    assert!(levels(&e, Clock::Progress).is_empty());
+    assert!(
+        levels(&e, Clock::Progress).is_empty(),
+        "no checkpoints, no progress clock"
+    );
     assert_eq!(levels(&e, Clock::Task), [Level::Crossed]);
 }
 
@@ -467,7 +500,7 @@ fn a_heard_suspect_is_shown_not_adopted() {
             from: &s("b"),
         },
     );
-    assert!(c.tick(at(2)).is_empty());
+    assert!(c.tick(at(2)).is_empty(), "a heard suspect is not adopted");
     assert_eq!(c.rows(at(2))[0].suspected_by, BTreeSet::from([s("b")]));
 }
 
@@ -495,7 +528,7 @@ fn a_close_completes_every_lane_on_the_task() {
             .iter()
             .any(|x| x.peer == s("a") && x.why == Cleared::Completed)
     );
-    assert!(c.rows(at(31)).is_empty());
+    assert!(c.rows(at(31)).is_empty(), "a closed task leaves the view");
 }
 
 #[test]
@@ -516,7 +549,10 @@ fn a_vouch_buys_time_and_the_clock_climbs_again() {
     see(&mut c, at(0), &claimed("a", 1, true));
     c.tick(at(30));
     vouch(&mut c, at(40), "b");
-    assert!(levels(&c.tick(at(40)), Clock::Reachability).is_empty());
+    assert!(
+        levels(&c.tick(at(40)), Clock::Reachability).is_empty(),
+        "the vouch bought one cadence"
+    );
     assert_eq!(
         c.take_resolutions(),
         [Resolution {
@@ -526,7 +562,10 @@ fn a_vouch_buys_time_and_the_clock_climbs_again() {
             why: Cleared::Vouched
         }]
     );
-    assert!(levels(&c.tick(at(69)), Clock::Reachability).is_empty());
+    assert!(
+        levels(&c.tick(at(69)), Clock::Reachability).is_empty(),
+        "the vouch bought one cadence"
+    );
     assert_eq!(
         levels(&c.tick(at(70)), Clock::Reachability),
         [Level::Crossed]

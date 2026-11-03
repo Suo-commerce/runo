@@ -296,7 +296,10 @@ mod tests {
             e.escalated(&lane(), Clock::Progress, Level::Called, v(2), &t),
             Change::Unchanged
         );
-        assert!(e.pending().is_empty());
+        assert!(
+            e.pending().is_empty(),
+            "no level above the delivered one, nothing owed"
+        );
         assert_eq!(
             e.escalated(&lane(), Clock::Progress, Level::Suspected, v(3), &t),
             Change::Raised
@@ -343,7 +346,7 @@ mod tests {
         let sent = deliver_all(&mut e);
         assert_eq!(sent.len(), 1, "pruning never drops an owed notice");
         assert_eq!(sent[0].resolved, Some(Cleared::Evidence));
-        assert!(e.pending().is_empty());
+        assert!(e.pending().is_empty(), "delivered once, nothing owed");
     }
 
     #[test]
