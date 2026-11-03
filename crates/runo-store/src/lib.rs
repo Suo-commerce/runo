@@ -1,35 +1,18 @@
-//! `SongStore` and its role traits, the jsonl and in-memory backends, the fence log and the
-//! store service (technical spec §7). One process owns a chorus's store; everyone else is a client.
+//! `SongStore` and its role traits, the jsonl and in-memory backends, the resource fence store
+//! and the store service (technical spec §7). One process owns a chorus's store; everyone else is
+//! a client. The types a fence is spoken in (`Fence`, `FenceAck`, `Durability`, `RecordClass`)
+//! live in `runo-core` and are re-exported here.
 
-pub mod fence_log;
 pub mod jsonl;
 pub mod mem;
+pub mod resource_fences;
 pub mod service;
 
 use async_trait::async_trait;
+pub use runo_core::fence::{Durability, Fence, FenceAck};
 pub use runo_core::ingress::RecordClass;
 use runo_core::ingress::TaskState;
 use runo_core::{Epoch, Hash, Refrain, SingerId, TaskId, Verse, VerseId};
-
-/// How durable an append must be before it returns.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Durability {
-    /// Survives the singer's process crashing.
-    Process,
-    /// Survives power loss on the host: fsync has returned.
-    Host,
-    /// Survives loss of fewer than k replicas.
-    Replicated(u8),
-}
-
-/// A fence as a resource stores it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Fence {
-    /// Writes at this epoch or above are admitted.
-    Epoch(Epoch),
-    /// Above every epoch: nothing writes after it.
-    Closed,
-}
 
 /// Proof an append happened at the requested level.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -38,15 +21,6 @@ pub struct Receipt {
     pub id: VerseId,
     /// The level reached.
     pub level: Durability,
-}
-
-/// A resource's acknowledgement of an installed fence.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct FenceAck {
-    /// The fence now enforced.
-    pub fence: Fence,
-    /// Durable before this ack.
-    pub durable: bool,
 }
 
 /// A read cursor over the store.
@@ -148,10 +122,14 @@ pub trait VerseWriter: Send + Sync {
     async fn put_blob(&self, bytes: &[u8]) -> Result<Hash, StoreError>;
 }
 
-/// Fences and task lifecycle.
+/// The store's own installed fences and task lifecycle, as the song's first fenced resource
+/// (technical spec §7–§8; technical decisions 3 and 5). This is the resource-side contract; the
+/// allocator's reservations and closure recovery state are a different one, `AllocatorJournal`
+/// in `runo-fence`. The two may share a backend.
 #[async_trait]
-pub trait FenceLog: Send + Sync {
-    /// Install a fence from a `Grant` verse; durable before the ack; never lowers.
+pub trait ResourceFenceStore: Send + Sync {
+    /// Install a fence from a `Grant` verse (an epoch fence) or a `Close` verse (`Closed`);
+    /// durable before the ack; never lowers. The ack names this store as the resource.
     async fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError>;
     /// The installed fence for a chain owner, if any.
     async fn installed_fence(
@@ -172,6 +150,23 @@ pub trait RefrainSlot: Send + Sync {
     async fn latest_refrains(&self) -> Result<Vec<Refrain>, StoreError>;
 }
 
+/// Reads for sealing and verification (technical spec §9; technical decisions 2): the closure
+/// snapshot a `Close` verse names, blobs, and every record of a task including its history. A
+/// different contract from `runo_core::ingress::IngressView`, which answers only the synchronous
+/// validation facts ingress needs.
+#[async_trait]
+pub trait ScribeRead: Send + Sync {
+    /// The closure snapshot blob a `Close` verse references, if the store holds it.
+    async fn snapshot(&self, close: &VerseId) -> Result<Option<Vec<u8>>, StoreError>;
+    /// A blob by hash.
+    async fn blob(&self, h: &Hash) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Every record of a task, every class, in arrival order.
+    async fn task_records(&self, task: &TaskId) -> Result<Vec<Record>, StoreError>;
+}
+
 /// The whole store: the sum of the role traits.
-pub trait SongStore: VerseReader + VerseWriter + FenceLog + RefrainSlot {}
-impl<T: VerseReader + VerseWriter + FenceLog + RefrainSlot> SongStore for T {}
+pub trait SongStore:
+    VerseReader + VerseWriter + ResourceFenceStore + RefrainSlot + ScribeRead
+{
+}
+impl<T: VerseReader + VerseWriter + ResourceFenceStore + RefrainSlot + ScribeRead> SongStore for T {}

@@ -85,8 +85,10 @@ pub enum TaskState {
     Closed,
 }
 
-/// What ingress needs to know about the store, without I/O.
-pub trait StoreView {
+/// The synchronous validation facts ingress needs from the store, without I/O (technical
+/// decisions 2). Reads for sealing and verification are a different contract,
+/// `runo_store::ScribeRead`.
+pub trait IngressView {
     /// The persisted class of this verse if it is already stored, byte for byte.
     ///
     /// Ingress reads the class rather than deciding one (step 2), so a re-admitted record keeps
@@ -117,7 +119,7 @@ pub trait RosterHistory {
 /// Structural checks complete before the fence decisions, so a `History` verse is always
 /// well-formed. Implemented in milestone 2.
 #[must_use]
-pub fn admit(_verse: &Verse, _rosters: &dyn RosterHistory, _view: &dyn StoreView) -> Decision {
+pub fn admit(_verse: &Verse, _rosters: &dyn RosterHistory, _view: &dyn IngressView) -> Decision {
     todo!("milestone 2: runo-core ingress")
 }
 

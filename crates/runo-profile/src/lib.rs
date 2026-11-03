@@ -53,8 +53,9 @@ pub struct States {
 pub struct CadenceConfig {
     /// `fixed` or `corpus`.
     pub source: String,
-    /// Escalation multipliers, e.g. `[1.0, 1.5, 2.0]`.
-    pub escalate: Vec<f32>,
+    /// Escalation factors in integer tenths: Core is `[10, 15, 20]` for 1x, 1.5x, 2x. Integers
+    /// on purpose; no floats anywhere near the wire (technical decisions 6).
+    pub escalate: Vec<u64>,
     /// Per-state cadence in minutes.
     #[serde(flatten)]
     pub per_state: std::collections::BTreeMap<String, toml::Value>,
@@ -107,10 +108,42 @@ fn check_profile(p: &Profile) -> Result<(), ProfileError> {
             "states.initial is not a declared state".into(),
         ));
     }
-    if p.cadence.escalate.len() != 3 {
+    let e = &p.cadence.escalate;
+    if e.len() != 3 {
         return Err(ProfileError::Check(
-            "cadence.escalate must have three values".into(),
+            "cadence.escalate must have three values, in tenths".into(),
+        ));
+    }
+    if e[0] < 10 || e[1] < e[0] || e[2] < e[1] {
+        return Err(ProfileError::Check(
+            "cadence.escalate must rise from at least 10 tenths (1x)".into(),
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_profile;
+
+    #[test]
+    fn the_example_profiles_load() {
+        for text in [
+            include_str!("../../../profiles/lane.toml"),
+            include_str!("../../../profiles/herald.toml"),
+            include_str!("../../../profiles/sentinel.toml"),
+            include_str!("../../../profiles/owner.toml"),
+            include_str!("../../../profiles/goliath.toml"),
+        ] {
+            let p = load_profile(text).expect("profile loads");
+            assert_eq!(p.cadence.escalate, vec![10, 15, 20]);
+        }
+    }
+
+    #[test]
+    fn float_escalation_is_refused() {
+        let text = include_str!("../../../profiles/lane.toml")
+            .replace("escalate  = [10, 15, 20]", "escalate  = [1.0, 1.5, 2.0]");
+        assert!(load_profile(&text).is_err());
+    }
 }

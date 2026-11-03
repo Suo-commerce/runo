@@ -12,11 +12,12 @@ Runo Core Technical Specification. This file holds the rules that keep the code 
 - **`Payload` is matched in exactly two places:** `runo_core::ingress::admit` and
   `runo_clock::Chorus::observe`. Everything else asks those two.
 - **Extend by trait, not by match arm.** Later features arrive as implementations of
-  `CadenceSource`, `RosterGovernance`, `SongStore`, `FencedResource`, `IndependenceVerifier`.
+  `CadenceSource`, `RosterGovernance`, `SongStore`, `FencedResource`, `AllocatorJournal`,
+  `IndependenceVerifier`.
 - **Every trait has a conformance suite** in `runo-testkit` (`store_conformance!`,
   `fenced_resource_conformance!`, `cadence_source_conformance!`). A new implementation is not
   done until the suite passes against it.
-- **Role traits over god traits.** Callers take `&dyn VerseReader`, `&dyn FenceLog`, never
+- **Role traits over god traits.** Callers take `&dyn VerseReader`, `&dyn ResourceFenceStore`, never
   `&dyn SongStore` unless they need all of it.
 - **Dependencies point down.** `runo-core` imports nothing from the workspace. Check the table in
   `README.md` before adding a `[dependencies]` line.
@@ -26,6 +27,8 @@ Runo Core Technical Specification. This file holds the rules that keep the code 
   specification §2 saying why.
 - **Wire types change only under the version rule** (technical spec §3): new fields need a
   version bump; `Option` and defaults are for values within the existing field set.
+- **Every duration is `Millis`** in protocol types, interfaces and persisted data; escalation
+  factors are integer tenths; `std::time::Duration` appears only at a timer boundary.
 
 ## Ownership table — one home per concept
 
@@ -36,7 +39,9 @@ Runo Core Technical Specification. This file holds the rules that keep the code 
 | Ingress decisions | `runo_core::ingress` |
 | Verse and refrain builders, fixture chorus, `SimClock`, `FailurePlan` | `runo_testkit` |
 | Merkle tree | `runo_scribe::merkle` |
-| Fence persistence | `runo_store::fence_log` |
+| Fencing types (`Fence`, `FenceAck`, `Durability`, `RecordClass`) | `runo_core::fence`, `runo_core::ingress` |
+| The store's installed fences | `runo_store::resource_fences` (`ResourceFenceStore`) |
+| The allocator's reservations and closure record | `runo_fence::AllocatorJournal` |
 | Escalation thresholds | `runo_clock::escalate` |
 | Human-facing delivery | `runo_node::channel::human` |
 

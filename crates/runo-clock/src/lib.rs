@@ -3,10 +3,8 @@
 
 pub mod escalate;
 
-use std::time::Duration;
-
 use runo_core::time::Instant;
-use runo_core::{About, Clock, Refrain, SingerId, TaskId, Verse};
+use runo_core::{About, Clock, Millis, Refrain, SingerId, TaskId, Verse};
 
 /// One observation about a peer.
 pub enum Observation<'a> {
@@ -59,8 +57,8 @@ pub struct Escalation {
     pub clock: Clock,
     /// New level.
     pub level: Level,
-    /// How far past the threshold.
-    pub overdue_by: Duration,
+    /// How far past the threshold, in milliseconds like every protocol duration.
+    pub overdue_by: Millis,
 }
 
 /// Clock state for every peer this voice listens to.
