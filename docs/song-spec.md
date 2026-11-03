@@ -200,19 +200,33 @@ The Song defines a storage interface and depends on no backend. A verse is appen
 ```rust
 pub enum Durability { Process, Host, Replicated(u8) }
 
+/// How the store classified a record on admission. Persisted beside the verse's unchanged bytes;
+/// the signed bytes never carry local state. A reader skips History for live clocks.
+pub enum RecordClass { Current, History, Control }
+pub struct Record { pub verse: Verse, pub class: RecordClass, pub cursor: Cursor }
+
+/// A resource's acknowledgement of an installed fence: explicit, never supplied from the
+/// installer's context. `grant` is the Grant verse, or the Close verse for Fence::Closed.
+pub struct FenceAck { pub resource: ResourceId, pub grant: VerseId, pub fence: Fence, pub durability: Durability }
+
 pub trait SongStore {
-    /// Append to an unfenced chain (refrains' chains, peer verses, records).
+    /// Append to an unfenced chain (refrains' chains, peer verses, records). Class: Current.
     /// Refused with FenceError::Fenced if (singer, task) has an installed fence.
     fn append(&self, verse: &Verse, level: Durability) -> Result<Receipt, StoreError>;
     /// Append to a fenced chain. Succeeds only if verse.grant is a valid allocator
     /// grant for (singer, task, epoch) and verse.epoch >= the installed fence.
-    /// Check and append are one atomic step, on every writable replica.
+    /// Check and append are one atomic step, on every writable replica. Class: Current.
     fn append_fenced(&self, verse: &Verse, level: Durability) -> Result<Receipt, FenceError>;
-    /// Install a fence. Durable at `Host` or better before it acknowledges;
-    /// never lowers an existing fence.
-    fn install_fence(&self, grant: &FenceGrant) -> Result<FenceAck, StoreError>;
+    /// Historical evidence below the fence or after closure: kept unchanged, no effects. Class: History.
+    fn archive(&self, verse: &Verse, level: Durability) -> Result<Receipt, StoreError>;
+    /// Allocator records (Close, Tome, Addendum) on a closed task. Class: Control.
+    fn record(&self, verse: &Verse, level: Durability) -> Result<Receipt, StoreError>;
+    /// Install a fence from the Grant verse (or the Close verse for Closed). Durable at `Host`
+    /// or better before it acknowledges; never lowers an existing fence.
+    fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError>;
     fn refrain(&self, r: &Refrain) -> Result<(), StoreError>;
-    fn read_since(&self, cursor: Cursor) -> Result<Vec<Verse>, StoreError>;
+    /// Every record after the cursor, with the class it was first admitted under.
+    fn read_since(&self, cursor: Cursor) -> Result<Vec<Record>, StoreError>;
     /// Latest (epoch, seq, hash) for one chain.
     fn head(&self, singer: &SingerId, task: &TaskId) -> Result<Option<Head>, StoreError>;
 }
