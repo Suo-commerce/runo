@@ -10,9 +10,9 @@
 //!    with the same key, never a new one; the channel uses the key to drop the duplicate.
 //! 3. A clock resolves (`runo_clock::Resolution`) → [`Episodes::resolved`]; save.
 //!
-//! One reading taken where the table is silent: an episode that resolves before its notice was
-//! delivered is not delivered at all. A stall that cleared itself is not news, and the replay
-//! measured that most of them do.
+//! Where the table is silent, every episode reaches a person, including one that resolved before
+//! its notice went out (Jarmo, 3 Nov 2026): most unanswered suspects still benefit from a human
+//! answer. Such a notice carries the resolution, so the message says it already cleared and why.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -63,6 +63,12 @@ impl Episode {
     pub fn is_open(&self) -> bool {
         self.resolved.is_none()
     }
+
+    /// Whether a notice is still owed for it.
+    #[must_use]
+    pub fn owes(&self) -> bool {
+        self.delivered.is_none_or(|d| self.level > d)
+    }
 }
 
 /// What an escalation did to the ledger.
@@ -83,6 +89,8 @@ pub struct Notice {
     pub id: EpisodeId,
     /// At which level.
     pub level: Level,
+    /// Set when the episode already resolved before this notice went out.
+    pub resolved: Option<Cleared>,
 }
 
 impl Notice {
@@ -165,16 +173,17 @@ impl Episodes {
             .is_some()
     }
 
-    /// Notices owed: each open episode whose level is above what was delivered, at its current
-    /// level only (levels passed while undelivered are folded into one message).
+    /// Notices owed: each episode, open or resolved, whose level is above what was delivered, at
+    /// its current level only (levels passed while undelivered are folded into one message).
     #[must_use]
     pub fn pending(&self) -> Vec<Notice> {
         self.episodes
             .iter()
-            .filter(|e| e.is_open() && e.delivered.is_none_or(|d| e.level > d))
+            .filter(|e| e.owes())
             .map(|e| Notice {
                 id: e.id.clone(),
                 level: e.level,
+                resolved: e.resolved.as_ref().map(|(_, why)| *why),
             })
             .collect()
     }
@@ -197,12 +206,14 @@ impl Episodes {
         self.episodes.iter().filter(|e| e.is_open())
     }
 
-    /// Keep every open episode and the newest `keep` resolved ones.
+    /// Keep every open episode, every episode still owed a notice, and the newest `keep`
+    /// resolved and delivered ones.
     pub fn prune(&mut self, keep: usize) {
-        let resolved = self.episodes.iter().filter(|e| !e.is_open()).count();
+        let done = |e: &Episode| !e.is_open() && !e.owes();
+        let resolved = self.episodes.iter().filter(|e| done(e)).count();
         let mut drop = resolved.saturating_sub(keep);
         self.episodes.retain(|e| {
-            if drop > 0 && !e.is_open() {
+            if drop > 0 && done(e) {
                 drop -= 1;
                 return false;
             }
@@ -324,10 +335,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stall_that_clears_before_delivery_is_not_delivered() {
+    fn a_stall_that_clears_before_delivery_is_still_delivered_saying_so() {
         let mut e = Episodes::default();
         e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &ts("10:00"));
         e.resolved(&lane(), Clock::Progress, Cleared::Evidence, &ts("10:05"));
+        e.prune(0);
+        let sent = deliver_all(&mut e);
+        assert_eq!(sent.len(), 1, "pruning never drops an owed notice");
+        assert_eq!(sent[0].resolved, Some(Cleared::Evidence));
         assert!(e.pending().is_empty());
     }
 
@@ -394,6 +409,7 @@ mod tests {
         let mut e = Episodes::default();
         for n in 0..4 {
             e.escalated(&lane(), Clock::Task, Level::Called, v(n), &ts("t"));
+            deliver_all(&mut e);
             e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("t"));
         }
         e.escalated(&lane(), Clock::Task, Level::Called, v(9), &ts("t"));
