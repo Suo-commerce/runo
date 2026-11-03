@@ -7,6 +7,7 @@ pub mod jsonl;
 pub mod mem;
 pub mod resource_fences;
 pub mod service;
+pub mod state;
 
 use async_trait::async_trait;
 pub use runo_core::fence::{Durability, Fence, FenceAck};

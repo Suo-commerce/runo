@@ -19,4 +19,6 @@ serde = { workspace = true }
 
 
     [dev-dependencies]
+    runo-testkit = { workspace = true }
+    tokio = { workspace = true }
 

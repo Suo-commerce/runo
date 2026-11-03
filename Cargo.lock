@@ -791,6 +791,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "runo-core",
+ "runo-testkit",
  "serde",
  "thiserror",
  "tokio",
@@ -801,10 +802,12 @@ name = "runo-testkit"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "proptest",
  "rand_core 0.6.4",
  "runo-cadence",
  "runo-core",
  "runo-store",
+ "tokio",
 ]
 
 [[package]]
