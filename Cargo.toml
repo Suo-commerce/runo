@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Suo-commerce/runo"
-rust-version = "1.85"
+rust-version = "1.89"   # File::try_lock: the jsonl store's single-opener lock
 
 [workspace.dependencies]
 # Core crates may use only these (Runo Core Technical Specification §2, dependency policy).
@@ -36,6 +36,8 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 proptest = "1"
+# runo-store only: the jsonl backend's human-readable lines (technical spec §2).
+serde_json = "1"
 
 # workspace-internal
 runo-core = { path = "crates/runo-core", version = "0.1.0" }

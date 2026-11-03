@@ -348,10 +348,10 @@ impl State {
             .entry(h.seq)
             .or_default()
             .push(id);
-        if class != RecordClass::History {
-            if let Payload::Activation { grant, .. } = &verse.payload {
-                self.activated.insert(*grant);
-            }
+        if class != RecordClass::History
+            && let Payload::Activation { grant, .. } = &verse.payload
+        {
+            self.activated.insert(*grant);
         }
         self.by_id.insert(id, self.records.len());
         self.records.push((verse, class));

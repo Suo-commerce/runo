@@ -83,7 +83,7 @@ flowchart BT
 | `runo-core` | Wire types, canonical CBOR, hashing, signing, ingress decisions, the shared fencing types (`Fence`, `FenceAck`, `Durability`, `RecordClass`), `Clock` and `Instant` | `serde`, `ciborium`, `blake3`, `ed25519-dalek` |
 | `runo-profile` | Profile and manifest TOML, load-time checks | `runo-core`, `toml` |
 | `runo-cadence` | `CadenceSource` trait, `FixedCadence` and `CorpusCadence` (§13); thresholds in `Millis`, factors in tenths | `runo-core`, `runo-profile` |
-| `runo-store` | `SongStore` and its role traits (`VerseReader`, `VerseWriter`, `ResourceFenceStore`, `RefrainSlot`, `ScribeRead`), jsonl and in-memory backends, the resource fence store, the store service and client | `runo-core`, `tokio` |
+| `runo-store` | `SongStore` and its role traits (`VerseReader`, `VerseWriter`, `ResourceFenceStore`, `RefrainSlot`, `ScribeRead`), jsonl and in-memory backends, the resource fence store, the store service and client | `runo-core`, `tokio`, `serde_json` |
 | `runo-clock` | `Chorus`, four clocks, escalation, suspicion | `runo-core`, `runo-cadence` |
 | `runo-fence` | `Allocator`, `AllocatorJournal`, `FencedResource`, `StoreResource`, `FenceGuard`, `OpKey`, task lifecycle | `runo-core`, `runo-store` |
 | `runo-node` | The voice runtime and its traits (`CallChannel`, `RecoveryAuthority`); the human `CallChannel` with dedup | all of the above |
@@ -110,7 +110,7 @@ The human `CallChannel` delivers one message per episode and level: a comment on
 
 Later crates (`runo-store-taso`, `runo-cadence-aegloss`, and the allocator side of `runo-adapter-paperclip`) implement Core traits and sit beside the workspace or in it behind feature flags; nothing in Core imports them. `runo-testkit` is a dev-dependency only and never ships in a binary.
 
-**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest`, because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8). The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
+**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest`, because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8). `runo-store` adds `serde_json` for the jsonl backend's human-readable lines (§7), so a song can be read with `grep` and the replay kit. The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
 
 ## 3. Data model
 

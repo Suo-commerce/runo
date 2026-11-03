@@ -141,10 +141,10 @@ pub fn admit(verse: &Verse, rosters: &dyn RosterHistory, view: &dyn IngressView)
         return Decision::Reject(RejectReason::Unknown);
     }
     // 2. Byte-identical verse already stored.
-    if let Some(class) = view.stored_class(&id) {
-        if view.get(&id).as_ref() == Some(verse) {
-            return Decision::Stored { class };
-        }
+    if let Some(class) = view.stored_class(&id)
+        && view.get(&id).as_ref() == Some(verse)
+    {
+        return Decision::Stored { class };
     }
     // 3. Roster version, singer, key.
     let Some(roster) = rosters.at(h.roster) else {
@@ -230,15 +230,16 @@ fn missing(verse: &Verse, view: &dyn IngressView) -> Vec<VerseId> {
         .flatten()
         .filter(|r| view.get(r).is_none())
         .collect();
-    if let Some(g) = h.grant {
-        if view.get(&g).is_some() && !view.has_activation(&g) {
-            out.push(g);
-        }
+    if let Some(g) = h.grant
+        && view.get(&g).is_some()
+        && !view.has_activation(&g)
+    {
+        out.push(g);
     }
-    if let Payload::Activation { grant, .. } = &verse.payload {
-        if view.get(grant).is_none() {
-            out.push(*grant);
-        }
+    if let Payload::Activation { grant, .. } = &verse.payload
+        && view.get(grant).is_none()
+    {
+        out.push(*grant);
     }
     out.sort();
     out.dedup();
