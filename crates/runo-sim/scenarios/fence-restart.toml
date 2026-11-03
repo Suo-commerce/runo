@@ -1,0 +1,3 @@
+# fence-restart
+description = "A resource restarts after acknowledging a fence. Must hold: fence persists; S1."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

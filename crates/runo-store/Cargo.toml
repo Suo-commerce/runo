@@ -1,0 +1,22 @@
+    [package]
+    name = "runo-store"
+    description = "SongStore and its role traits, jsonl and in-memory backends, the store service."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+
+    [dev-dependencies]
+

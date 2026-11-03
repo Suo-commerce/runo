@@ -1,0 +1,3 @@
+# wait-overdue
+description = "A lane blocks longer than its task deadline, then resumes. Must hold: only the waiting clock escalates; task time resumes from its pre-wait value."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

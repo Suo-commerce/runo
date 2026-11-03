@@ -1,0 +1,20 @@
+# The owner: a voice, not a listener above the chorus. Human cadence; does not count toward three.
+role = "owner"
+probe_interval = "15m"
+durability     = "host"
+
+[states]
+initial  = "present"
+terminal = []
+transitions = [["present", "away"], ["away", "present"]]
+
+[cadence]
+source   = "fixed"
+present  = 240
+away     = 1440
+escalate = [1.0, 1.5, 2.0]
+
+[listen]
+to = ["*"]
+
+[fenced]

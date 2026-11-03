@@ -1,0 +1,3 @@
+# two-readers
+description = "Two nodes read one stored Claimed verse, then re-read it. Must hold: each establishes the task once; neither resets on re-read."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

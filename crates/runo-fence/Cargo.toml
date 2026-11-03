@@ -1,0 +1,21 @@
+    [package]
+    name = "runo-fence"
+    description = "Grants, activations, the resource guard, task lifecycle and operation keys."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+runo-store = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+
+    [dev-dependencies]
+

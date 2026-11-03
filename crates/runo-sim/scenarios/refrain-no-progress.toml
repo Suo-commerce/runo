@@ -1,0 +1,3 @@
+# refrain-no-progress
+description = "A lane refrains and acks with a fixed height. Must hold: Progress suspect at 2x; vouches do not suppress it."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

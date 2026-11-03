@@ -1,0 +1,20 @@
+    [package]
+    name = "runo-cadence"
+    description = "CadenceSource: fixed and corpus-read cadences."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+runo-profile = { workspace = true }
+thiserror = { workspace = true }
+
+
+    [dev-dependencies]
+

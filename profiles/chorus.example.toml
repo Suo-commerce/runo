@@ -1,0 +1,38 @@
+# chorus.toml — the manifest `runo init` reads (technical spec §10)
+name      = "example-mine"
+allocator = "local"
+
+[retention]
+tomes_hot_days = 30
+
+[[voice]]
+singer   = "lane-1"
+profile  = "profiles/lane.toml"
+host     = "worker-a"
+provider = "anthropic"
+credential = "bao://mine/lanes/1"     # a reference; runo never reads the secret
+network  = "wg-llm"
+
+[[voice]]
+singer   = "lane-2"
+profile  = "profiles/lane.toml"
+host     = "worker-a"
+provider = "litellm"
+credential = "bao://mine/lanes/2"
+network  = "wg-llm"
+
+[[voice]]
+singer   = "sentinel"
+profile  = "profiles/sentinel.toml"
+host     = "pi-1"
+provider = "none"
+credential = "file://none"
+network  = "lan"
+
+[[voice]]
+singer   = "owner"
+profile  = "profiles/owner.toml"
+host     = "laptop"
+provider = "none"
+credential = "token://yubikey"
+network  = "lan"

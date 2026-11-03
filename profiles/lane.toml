@@ -1,0 +1,32 @@
+# A Dwarven Mine lane (technical spec §10)
+role = "lane"
+refrain_interval = "60s"
+probe_interval   = "30s"
+durability       = "host"
+
+[states]
+initial  = "claimed"
+terminal = ["folded", "exited"]
+transitions = [
+  ["claimed",  "building"],
+  ["building", "package"],
+  ["package",  "folded"],
+  ["*",        "waiting"],
+  ["waiting",  "*"],
+  ["*",        "exited"],
+]
+
+[cadence]
+source    = "corpus"      # last ten closed chains per unit and area; values below are the fallback
+building  = 30
+package   = 60
+waiting   = 60
+escalate  = [1.0, 1.5, 2.0]
+
+[listen]
+to = ["foreman", "smith"]
+
+[fenced]
+resources = ["song", "merge-gate", "worktree"]
+keyed     = ["notify"]
+accepted_risk = []

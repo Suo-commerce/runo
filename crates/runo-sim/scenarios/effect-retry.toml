@@ -1,0 +1,3 @@
+# effect-retry
+description = "Keyed effect retried across epochs with a lost ack. Must hold: Dedup sees one effect."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

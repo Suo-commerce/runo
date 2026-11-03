@@ -1,0 +1,19 @@
+# The herald: Paperclip's signals as peer verses about lanes (a chorus of one at tier 2)
+role = "herald"
+probe_interval = "60s"
+durability     = "host"
+
+[states]
+initial  = "online"
+terminal = ["offline"]
+transitions = [["online", "offline"]]
+
+[cadence]
+source   = "corpus"
+online   = 15
+escalate = [1.0, 1.5, 2.0]
+
+[listen]
+to = ["lane"]
+
+[fenced]

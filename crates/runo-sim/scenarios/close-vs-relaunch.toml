@@ -1,0 +1,3 @@
+# close-vs-relaunch
+description = "Closure races a relaunch, including a different singer. Must hold: no activation escapes the closing task; snapshot grant set is the one closed."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

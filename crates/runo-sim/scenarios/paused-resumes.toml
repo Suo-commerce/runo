@@ -1,0 +1,3 @@
+# paused-resumes
+description = "Old incarnation sleeps through its replacement and writes afterwards. Must hold: its writes archived as History; S1."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

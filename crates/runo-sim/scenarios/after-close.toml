@@ -1,0 +1,3 @@
+# after-close
+description = "Work, a delayed signed verse, then tome and addendum on a closed task. Must hold: work refused; delayed verse archived; tome and addendum recorded."
+bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim

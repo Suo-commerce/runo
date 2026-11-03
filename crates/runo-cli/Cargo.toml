@@ -1,0 +1,33 @@
+    [package]
+    name = "runo-cli"
+    description = "The runo binary."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+runo-profile = { workspace = true }
+runo-cadence = { workspace = true }
+runo-store = { workspace = true }
+runo-clock = { workspace = true }
+runo-fence = { workspace = true }
+runo-node = { workspace = true }
+runo-scribe = { workspace = true }
+runo-adapter-paperclip = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+
+    [dev-dependencies]
+
+
+[[bin]]
+name = "runo"
+path = "src/main.rs"

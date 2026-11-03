@@ -1,0 +1,21 @@
+    [package]
+    name = "runo-adapter-paperclip"
+    description = "The herald: Paperclip signals sung as peer verses about lanes."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+runo-node = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+
+    [dev-dependencies]
+

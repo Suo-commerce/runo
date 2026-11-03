@@ -1,0 +1,13 @@
+# cargo-deny: no duplicate dependency versions, permissive licences only.
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+[advisories]
+yanked = "deny"

@@ -1,0 +1,29 @@
+# A Goliath machine: boot session as task; silent by design while asleep
+role = "machine"
+refrain_interval = "15m"
+probe_interval   = "5m"
+durability       = "host"
+
+[states]
+initial  = "online"
+terminal = ["going-offline"]
+transitions = [
+  ["online", "sleep"], ["sleep", "wake"], ["wake", "online"],
+  ["online", "docked"], ["docked", "undocked"], ["undocked", "online"],
+  ["online", "state-saved"], ["state-saved", "going-offline"],
+  ["online", "state-restored"], ["state-restored", "online"],
+  ["*", "waiting"], ["waiting", "*"],
+]
+
+[cadence]
+source   = "fixed"
+online   = 60
+sleep    = 1440
+waiting  = 120
+escalate = [1.0, 1.5, 2.0]
+
+[listen]
+to = ["machine", "sentinel"]
+
+[fenced]
+resources = ["song", "state-vessel"]

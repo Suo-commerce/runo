@@ -1,0 +1,9 @@
+{
+  "threshold": 2,
+  "minLines": 8,
+  "minTokens": 60,
+  "format": ["rust", "python"],
+  "ignore": ["**/target/**", "**/tests/**", "**/*_test.rs", "**/node_modules/**"],
+  "reporters": ["console"],
+  "gitignore": true
+}

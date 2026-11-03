@@ -1,0 +1,19 @@
+# A model-free sentinel on separate hardware: the cheapest independent voice
+role = "sentinel"
+probe_interval = "30s"
+durability     = "host"
+
+[states]
+initial  = "online"
+terminal = ["offline"]
+transitions = [["online", "offline"]]
+
+[cadence]
+source   = "fixed"
+online   = 15
+escalate = [1.0, 1.5, 2.0]
+
+[listen]
+to = ["*"]
+
+[fenced]

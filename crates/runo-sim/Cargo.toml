@@ -1,0 +1,26 @@
+    [package]
+    name = "runo-sim"
+    description = "Deterministic simulation harness and the fourteen scenarios."
+    version.workspace = true
+    edition.workspace = true
+    license.workspace = true
+    repository.workspace = true
+    rust-version.workspace = true
+
+    [lints]
+    workspace = true
+
+    [dependencies]
+    runo-core = { workspace = true }
+runo-store = { workspace = true }
+runo-clock = { workspace = true }
+runo-fence = { workspace = true }
+runo-node = { workspace = true }
+runo-scribe = { workspace = true }
+runo-testkit = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+
+
+    [dev-dependencies]
+
