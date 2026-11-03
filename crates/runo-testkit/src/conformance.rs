@@ -66,7 +66,10 @@ pub mod store {
         let (after_first, _) = s.read_since(all[0].cursor).await.unwrap();
         assert_eq!(after_first.len(), 1);
         assert_eq!(after_first[0].verse, b);
-        assert!(s.read_since(next).await.unwrap().0.is_empty());
+        assert!(
+            s.read_since(next).await.unwrap().0.is_empty(),
+            "nothing is newer than the last cursor"
+        );
         let got = s.get(&b.seal.sum).await.unwrap().unwrap();
         assert_eq!((got.verse, got.class), (b, RecordClass::Current));
     }
