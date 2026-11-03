@@ -55,7 +55,10 @@ fn verdict() -> impl Strategy<Value = Verdict> {
     ]
 }
 
-#[expect(clippy::too_many_lines, reason = "one arm per payload kind, kept side by side")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per payload kind, kept side by side"
+)]
 fn payload() -> impl Strategy<Value = Payload> {
     let promise =
         (name(), any::<[u64; 3]>(), any::<bool>(), name()).prop_map(|(u, c, k, s)| Promise {
