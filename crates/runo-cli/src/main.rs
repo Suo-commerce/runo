@@ -260,7 +260,10 @@ fn doctor(board: &Board) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
         match client.version().await {
-            Ok(v) => println!("reach          ok, Paperclip {}", v.as_deref().unwrap_or("(version not given)")),
+            Ok(v) => println!(
+                "reach          ok, Paperclip {}",
+                v.as_deref().unwrap_or("(version not given)")
+            ),
             Err(e) => return Err(format!("cannot reach the board: {e}")),
         }
         if board.company.is_none() {
@@ -279,30 +282,53 @@ fn doctor(board: &Board) -> Result<(), String> {
             }
             return Ok(());
         }
-        let company = client.company().await.map_err(|e| format!("company: {e}"))?;
+        let company = client
+            .company()
+            .await
+            .map_err(|e| format!("company: {e}"))?;
         println!(
             "company name   {} (issues {}-…)",
             company.name,
             company.issue_prefix.as_deref().unwrap_or("?")
         );
-        let agents = client.agents().await.map_err(|e| format!("agents: {e}"))?;
-        let issues = client.issues().await.map_err(|e| format!("issues: {e}"))?;
-        let runs = client.runs().await.map_err(|e| format!("runs: {e}"))?;
-        let count = |s: &str| issues.iter().filter(|i| i.status == s).count();
-        println!(
-            "read           {} agents, {} issues ({} in progress, {} blocked, {} in review), {} runs",
-            agents.len(),
-            issues.len(),
-            count("in_progress"),
-            count("blocked"),
-            count("in_review"),
-            runs.len()
-        );
-        if issues.len() >= client.page() || runs.len() >= client.page() {
-            println!("note           a list filled a whole page: the first start sees only the newest {}", client.page());
-        }
-        Ok(())
+        counts(&client).await
     })
+}
+
+/// The counts `runo doctor` prints after reaching the board.
+async fn counts(client: &runo_adapter_paperclip::poll::Paperclip) -> Result<(), String> {
+    let agents = client.agents().await.map_err(|e| format!("agents: {e}"))?;
+    let issues = client.issues().await.map_err(|e| format!("issues: {e}"))?;
+    let runs = client.runs().await.map_err(|e| format!("runs: {e}"))?;
+    let open = client
+        .open_issues()
+        .await
+        .map_err(|e| format!("open issues: {e}"))?;
+    let count = |s: &str| open.iter().filter(|i| i.status == s).count();
+    println!(
+        "read           {} agents, {} recently updated issues, {} runs",
+        agents.len(),
+        issues.len(),
+        runs.len()
+    );
+    println!(
+        "open issues    {}: {} in progress, {} blocked, {} in review (all of them, however old)",
+        open.len(),
+        count("in_progress"),
+        count("blocked"),
+        count("in_review")
+    );
+    let unassigned = open
+        .iter()
+        .filter(|i| i.assignee_agent_id.is_none())
+        .count();
+    if unassigned > 0 {
+        println!("               {unassigned} of them have no agent assigned and are not watched");
+    }
+    if open.len() >= runo_adapter_paperclip::poll::MAX_PAGE {
+        println!("note           the open list filled a whole page: some open issues are not seen");
+    }
+    Ok(())
 }
 
 /// `runo watch`: poll, step, deliver, repeat.
@@ -340,13 +366,19 @@ fn watch(board: &Board, notify: &str, interval: u64, once: bool) -> Result<(), S
         let mut wait = interval.max(5);
         let mut last_open = None;
         loop {
-            let read = async { Ok::<_, PollError>((client.issues().await?, client.runs().await?)) };
+            let read = async {
+                Ok::<_, PollError>((
+                    client.issues().await?,
+                    client.open_issues().await?,
+                    client.runs().await?,
+                ))
+            };
             match read.await {
-                Ok((issues, runs)) => {
+                Ok((issues, open, runs)) => {
                     wait = interval.max(5);
                     let now = wall_now();
                     let out = w
-                        .step(&issues, &runs, client.page(), now)
+                        .step(&issues, &open, &runs, client.page(), now)
                         .map_err(|e| e.to_string())?;
                     for o in &out {
                         channel

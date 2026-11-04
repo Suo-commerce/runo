@@ -67,7 +67,7 @@ fn a_first_start_sends_what_is_stuck_now_and_keeps_history_quiet() {
     let d = dir("first");
     let mut w = open(&d);
     let (issues, runs) = first_page();
-    let out = w.step(&issues, &runs, 10, at(300)).unwrap();
+    let out = w.step(&issues, &[], &runs, 10, at(300)).unwrap();
     assert_eq!(out.len(), 1, "only HOD-2 is stuck now: {out:?}");
     assert_eq!(
         out[0].text,
@@ -88,13 +88,13 @@ fn a_restart_replays_history_without_repeating_a_message() {
     let d = dir("restart");
     let mut w = open(&d);
     let (issues, runs) = first_page();
-    for o in w.step(&issues, &runs, 10, at(300)).unwrap() {
+    for o in w.step(&issues, &[], &runs, 10, at(300)).unwrap() {
         w.delivered(&o.notice).unwrap();
     }
     drop(w);
 
     let mut again = open(&d);
-    let out = again.step(&issues, &runs, 10, at(305)).unwrap();
+    let out = again.step(&issues, &[], &runs, 10, at(305)).unwrap();
     assert_eq!(
         out,
         [],
@@ -111,6 +111,7 @@ fn a_crash_before_recording_delivery_resends_the_same_message() {
         .step(
             &page(&[issue("i2", "HOD-2", "blocked", 0)]),
             &[],
+            &[],
             10,
             at(130),
         )
@@ -122,6 +123,7 @@ fn a_crash_before_recording_delivery_resends_the_same_message() {
     let out = again
         .step(
             &page(&[issue("i2", "HOD-2", "blocked", 0)]),
+            &[],
             &[],
             10,
             at(131),
@@ -144,11 +146,11 @@ fn a_stall_getting_worse_is_one_more_message_and_a_failure_comes_first() {
         issue("i2", "HOD-2", "blocked", 0),
         issue("i1", "HOD-1", "in_progress", 100),
     ]);
-    let out = w.step(&issues, &[], 10, at(125)).unwrap();
+    let out = w.step(&issues, &[], &[], 10, at(125)).unwrap();
     assert_eq!(out.len(), 1, "{out:?}");
     w.delivered(&out[0].notice).unwrap();
     assert_eq!(
-        w.step(&issues, &[], 10, at(140)).unwrap(),
+        w.step(&issues, &[], &[], 10, at(140)).unwrap(),
         [],
         "nothing new yet"
     );
@@ -160,7 +162,7 @@ fn a_stall_getting_worse_is_one_more_message_and_a_failure_comes_first() {
         stamp(145)
     ))
     .unwrap();
-    let out = w.step(&issues, &failed, 10, at(160)).unwrap();
+    let out = w.step(&issues, &[], &failed, 10, at(160)).unwrap();
     let texts: Vec<&str> = out.iter().map(|o| o.text.as_str()).collect();
     assert_eq!(out.len(), 2, "{texts:?}");
     assert!(
@@ -194,6 +196,7 @@ fn links_open_the_boards_own_page_under_the_company_prefix() {
     let out = w
         .step(
             &page(&[issue("i2", "HOD-2", "blocked", 0)]),
+            &[],
             &[],
             10,
             at(130),

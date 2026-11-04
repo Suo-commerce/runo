@@ -129,7 +129,7 @@ fn runs(json: &str) -> Vec<Run> {
 #[test]
 fn each_change_is_one_event_in_board_time_order() {
     let mut feed = Feed::default();
-    let (ev, gaps) = feed.take(&issues(ISSUES), &runs(RUNS), 10);
+    let (ev, gaps) = feed.take(&issues(ISSUES), &[], &runs(RUNS), 10);
     assert_eq!(gaps, []);
     let order: Vec<String> = ev
         .iter()
@@ -144,26 +144,26 @@ fn each_change_is_one_event_in_board_time_order() {
         "a running run is not an event yet"
     );
 
-    let (ev, _) = feed.take(&issues(ISSUES), &runs(RUNS), 10);
+    let (ev, _) = feed.take(&issues(ISSUES), &[], &runs(RUNS), 10);
     assert_eq!(ev, [], "the same pages again say nothing new");
 
     let changed = ISSUES
         .replace("09:00:00Z\",\"title", "09:30:00Z\",\"title")
         .replace("\"blocked\"", "\"in_progress\"");
     let finished = RUNS.replace("\"status\":\"running\",\"createdAt\":\"2026-11-03T08:30:00Z\",\"finishedAt\":null", "\"status\":\"failed\",\"createdAt\":\"2026-11-03T08:30:00Z\",\"finishedAt\":\"2026-11-03T09:10:00Z\"");
-    let (ev, _) = feed.take(&issues(&changed), &runs(&finished), 10);
+    let (ev, _) = feed.take(&issues(&changed), &[], &runs(&finished), 10);
     assert_eq!(ev.len(), 2, "HOD-44 changed and r2 finished: {ev:?}");
 }
 
 #[test]
 fn a_full_page_that_does_not_reach_back_is_a_gap() {
     let mut feed = Feed::default();
-    feed.take(&issues(ISSUES), &runs(RUNS), 2);
+    feed.take(&issues(ISSUES), &[], &runs(RUNS), 2);
     let later = r#"[
       {"id":"i4","status":"todo","updatedAt":"2026-11-03T12:00:00Z"},
       {"id":"i3","status":"todo","updatedAt":"2026-11-03T11:00:00Z"}
     ]"#;
-    let (_, gaps) = feed.take(&issues(later), &runs(RUNS), 2);
+    let (_, gaps) = feed.take(&issues(later), &[], &runs(RUNS), 2);
     assert_eq!(
         gaps,
         [Gap {
@@ -172,6 +172,38 @@ fn a_full_page_that_does_not_reach_back_is_a_gap() {
             before: time::parse("2026-11-03T11:00:00Z").unwrap(),
         }]
     );
-    let (_, gaps) = feed.take(&issues(later), &runs(RUNS), 3);
+    let (_, gaps) = feed.take(&issues(later), &[], &runs(RUNS), 3);
     assert_eq!(gaps, [], "a page that is not full holds everything");
+}
+
+#[test]
+fn an_old_open_issue_off_the_newest_page_is_still_read_once() {
+    let mut feed = Feed::default();
+    let newest = issues(ISSUES);
+    let open = issues(
+        r#"[
+      {"id":"i9","identifier":"HOD-9","status":"blocked","assigneeAgentId":"a","updatedAt":"2026-10-01T08:00:00Z"},
+      {"id":"i2","identifier":"HOD-44","status":"blocked","assigneeAgentId":"a","updatedAt":"2026-11-03T09:00:00Z"}
+    ]"#,
+    );
+    let (ev, gaps) = feed.take(&newest, &open, &[], 2);
+    let names: Vec<&str> = ev
+        .iter()
+        .filter_map(|e| match e {
+            BoardEvent::Issue { name, .. } => Some(name.as_str()),
+            BoardEvent::RunFinished { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        ["HOD-9", "HOD-43", "HOD-44"],
+        "the month-old block is read, and HOD-44, on both lists, once"
+    );
+    assert_eq!(
+        gaps,
+        [],
+        "the open list does not count towards the gap check"
+    );
+    let (ev, _) = feed.take(&newest, &open, &[], 2);
+    assert_eq!(ev, [], "nothing changed");
 }
