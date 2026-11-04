@@ -35,6 +35,29 @@ to take over its control socket.
   `going-offline`. The view shows "offline, as it said".
 - **Crash or power cut:** nothing is sung, so the silence is called after 30 minutes.
 
+## Messages
+
+The node tells you once per incident, not once per minute: when a machine goes quiet past its
+expectation, when it is still quiet, and when it may be down (it then signs a `Suspect` verse).
+When the machine is heard again, you hear that once too. Messages go to the journal
+(`journalctl --user -u runo-node`) by default.
+
+**To get them on your phone (Telegram):**
+
+1. In Telegram, talk to `@BotFather`, send `/newbot`, and keep the token it gives you.
+2. Send any message to your new bot, then find your chat id:
+   `curl -s "https://api.telegram.org/bot<token>/getUpdates" | jq '.result[0].message.chat.id'`
+3. Store the token by reference, readable only by you:
+   ```sh
+   (umask 077; printf 'RUNO_TELEGRAM_TOKEN=%s\n' '<token>' > ~/.config/runo/telegram.env)
+   ```
+4. In `~/.config/runo/node.env`, set
+   `RUNO_NODE_ARGS=--notify terminal --notify telegram --telegram-chat <chat id>`.
+5. `systemctl --user restart runo-node`.
+
+The token is never printed or logged. Anyone who has it can write as your bot, so keep it out of
+the repository, issues and chats.
+
 ## Check it
 
 ```sh

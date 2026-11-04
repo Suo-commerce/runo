@@ -25,8 +25,8 @@ use runo_core::ingress::{Decision, RejectReason};
 use runo_core::sign::{seal, sign_refrain};
 use runo_core::time::Instant;
 use runo_core::{
-    Cadence, Epoch, Header, Millis, Payload, Progress, Promise, Refrain, RosterDoc, SingerId,
-    TaskId, TaskSpec, Timestamp, VerseId,
+    About, Cadence, Epoch, Header, Millis, Payload, Progress, Promise, Refrain, RosterDoc,
+    SingerId, TaskId, TaskSpec, Timestamp, VerseId,
 };
 use runo_profile::Profile;
 use runo_store::{RefrainSlot, StoreError, VerseReader, VerseWriter};
@@ -209,6 +209,9 @@ pub struct Voice<S: ?Sized> {
     state: Option<String>,
     /// Each peer's latest boot session: a machine runs one at a time.
     sessions: BTreeMap<SingerId, TaskId>,
+    /// Each listened peer's latest current verse per task: the verse a silence started after,
+    /// which names the episode.
+    heads: BTreeMap<(SingerId, TaskId), VerseId>,
 }
 
 impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
@@ -262,6 +265,7 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
             refrain_n: 0,
             state: None,
             sessions: BTreeMap::new(),
+            heads: BTreeMap::new(),
         })
     }
 
@@ -428,6 +432,45 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
         Ok(heard)
     }
 
+    /// The verse a peer's current silence started after, if this voice has heard it.
+    #[must_use]
+    pub fn head(&self, peer: &SingerId, task: &TaskId) -> Option<VerseId> {
+        self.heads.get(&(peer.clone(), task.clone())).copied()
+    }
+
+    /// Sing `Suspect` about a peer whose clock reached `Suspected` (technical spec §6, ladder
+    /// step 3). The node does nothing else: relaunch, if any, is the recovery authority's call.
+    ///
+    /// # Errors
+    /// The store fails, or ingress refuses the verse.
+    pub async fn suspect(
+        &mut self,
+        now: Instant,
+        wall: &Timestamp,
+        e: &Escalation,
+    ) -> Result<VerseId, VoiceError> {
+        self.read(now).await?;
+        let epoch = e.task.as_ref().and_then(|t| {
+            self.chorus
+                .rows(now)
+                .into_iter()
+                .find(|r| r.peer == e.peer && r.task == *t)
+                .map(|r| r.epoch)
+        });
+        let about = About {
+            singer: e.peer.clone(),
+            task: e.task.clone(),
+            epoch,
+            hash: e.task.as_ref().and_then(|t| self.head(&e.peer, t)),
+        };
+        let payload = Payload::Suspect {
+            about,
+            clock: e.clock,
+            overdue_by: e.overdue_by,
+        };
+        self.put(payload, wall).await
+    }
+
     /// The clocks, one row per peer and boot session.
     #[must_use]
     pub fn rows(&self, now: Instant) -> Vec<Row> {
@@ -456,8 +499,19 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
             }
             self.chorus
                 .observe(now, &self.me, Observation::Verse(verse));
-            if matches!(verse.payload, Payload::Claimed { .. }) {
-                self.new_session(now, singer, &verse.header.task);
+            self.heads
+                .insert((singer.clone(), verse.header.task.clone()), verse.seal.sum);
+            match &verse.payload {
+                Payload::Claimed { .. } => self.new_session(now, singer, &verse.header.task),
+                Payload::Suspect { about, clock, .. } => {
+                    let heard = Observation::SuspectHeard {
+                        about,
+                        clock: *clock,
+                        from: singer,
+                    };
+                    self.chorus.observe(now, &self.me, heard);
+                }
+                _ => {}
             }
         }
         Ok(Heard {

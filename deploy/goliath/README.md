@@ -20,6 +20,9 @@ cd deploy/goliath
 ./fleet.sh view       # in another terminal
 ```
 
+Messages (one per incident: quiet, still quiet, may be down, fine again) appear in the
+`./fleet.sh thinkpad` terminal; `deploy/thinkpad/README.md` shows how to get them on Telegram.
+
 Then try:
 
 ```sh

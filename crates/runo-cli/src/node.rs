@@ -7,11 +7,26 @@ use std::time::Duration;
 
 use runo_core::Timestamp;
 use runo_core::time::MonotonicClock;
+use runo_node::channel::human::{Fanout, HumanChannel, Terminal};
+use runo_node::channel::telegram::Telegram;
 use runo_node::identity::{ChorusDir, KeyHome};
-use runo_node::run::{SingReply, SingRequest, Timers, ask, bind_control, run};
+use runo_node::ladder::Ladder;
+use runo_node::run::{Env, SingReply, SingRequest, Timers, ask, bind_control, run};
 use runo_node::voice::{Voice, interval};
 use runo_profile::load_profile;
 use runo_store::service::StoreClient;
+
+/// Where a node keeps its episode ledger unless given: `$XDG_STATE_HOME/runo/node/<singer>.json`,
+/// else `~/.local/state/runo/node/<singer>.json`.
+pub fn state_path(singer: &str, given: Option<PathBuf>) -> PathBuf {
+    given.unwrap_or_else(|| {
+        let base = std::env::var_os("XDG_STATE_HOME").map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state"),
+            PathBuf::from,
+        );
+        base.join("runo/node").join(format!("{singer}.json"))
+    })
+}
 
 /// Where a singer's control socket lives unless given: `$XDG_RUNTIME_DIR/runo/<singer>.sock`,
 /// else `~/.local/state/runo/<singer>.sock`.
@@ -62,6 +77,43 @@ pub struct NodeArgs<'a> {
     pub owner_key: Option<&'a str>,
     /// The control socket.
     pub control: PathBuf,
+    /// The episode ledger.
+    pub state: PathBuf,
+    /// Where messages go: `terminal`, `telegram`, or both.
+    pub notify: &'a [String],
+    /// The Telegram chat id.
+    pub telegram_chat: Option<&'a str>,
+    /// The environment variable holding the bot token (never the token).
+    pub telegram_token_env: &'a str,
+}
+
+/// The person's channels, from `--notify`.
+fn channels(a: &NodeArgs<'_>) -> Result<Fanout, String> {
+    let mut out: Vec<Box<dyn HumanChannel>> = Vec::new();
+    for n in a.notify {
+        match n.as_str() {
+            "terminal" => out.push(Box::new(Terminal::new(std::io::stdout()))),
+            "telegram" => {
+                let token = std::env::var(a.telegram_token_env)
+                    .ok()
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(|| {
+                        format!(
+                            "--notify telegram: set {} to the bot token",
+                            a.telegram_token_env
+                        )
+                    })?;
+                let chat = a
+                    .telegram_chat
+                    .ok_or("--notify telegram needs --telegram-chat <chat id>")?;
+                out.push(Box::new(
+                    Telegram::new(&token, chat).map_err(|e| e.to_string())?,
+                ));
+            }
+            other => return Err(format!("--notify {other}: use terminal or telegram")),
+        }
+    }
+    Ok(Fanout(out))
 }
 
 /// This voice's profile, and every voice's from the manifest if one was given.
@@ -128,6 +180,8 @@ pub fn node(a: &NodeArgs<'_>) -> Result<(), String> {
         refrain: millis(profile.refrain_interval.as_deref().unwrap_or("15m"))?,
         probe: millis(&profile.probe_interval)?,
     };
+    let channel = channels(a)?;
+    let mut ladder = Ladder::open(Some(a.state.clone())).map_err(|e| e.to_string())?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async move {
         let store = connect_patiently(a.store).await?;
@@ -137,10 +191,12 @@ pub fn node(a: &NodeArgs<'_>) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         let control = bind_control(&a.control).map_err(|e| e.to_string())?;
         println!(
-            "runo node: {} on {}, control {}",
+            "runo node: {} on {}, control {}, messages to {}, episodes in {}",
             a.singer,
             a.store,
-            a.control.display()
+            a.control.display(),
+            a.notify.join(" and "),
+            a.state.display()
         );
         let clock = MonotonicClock::default();
         let mut log = |l: String| println!("{l}");
@@ -152,7 +208,14 @@ pub fn node(a: &NodeArgs<'_>) -> Result<(), String> {
                 () = async { match term.as_mut() { Some(t) => { t.recv().await; } None => std::future::pending().await } } => {}
             }
         };
-        let r = run(&mut voice, &clock, &wall, control, timers, &mut log, stop).await;
+        let mut env = Env {
+            clock: &clock,
+            wall: &wall,
+            log: &mut log,
+            ladder: &mut ladder,
+            channel: &channel,
+        };
+        let r = run(&mut voice, &mut env, control, timers, stop).await;
         let _ = std::fs::remove_file(&a.control);
         r.map_err(|e| e.to_string())
     })

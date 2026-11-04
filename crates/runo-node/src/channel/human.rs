@@ -70,6 +70,23 @@ impl<W: Write + Send> HumanChannel for Terminal<W> {
     }
 }
 
+/// Every message to several channels (the terminal and a phone). Each channel drops repeats by
+/// key, so a retry after one channel failed reaches the others once.
+pub struct Fanout(pub Vec<Box<dyn HumanChannel>>);
+
+#[async_trait]
+impl HumanChannel for Fanout {
+    async fn deliver(&self, notice: &Notice, text: &str) -> Result<(), CallError> {
+        let mut first = None;
+        for c in &self.0 {
+            if let Err(e) = c.deliver(notice, text).await {
+                first.get_or_insert(e);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{HumanChannel, Terminal};
@@ -91,6 +108,7 @@ mod tests {
             level: Level::Called,
             resolved: None,
             reason: "stalled".into(),
+            cleared: false,
         };
         let t = Terminal::new(Vec::new());
         t.deliver(&n, "HOD-43 is stalled").await.unwrap();

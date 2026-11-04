@@ -1226,6 +1226,7 @@ dependencies = [
  "async-trait",
  "ed25519-dalek",
  "rand_core 0.6.4",
+ "reqwest",
  "runo-cadence",
  "runo-clock",
  "runo-core",

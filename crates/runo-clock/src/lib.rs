@@ -323,7 +323,12 @@ impl Chorus {
                 Evidence::Progressed(mark) => self.progressed(now, singer, task, (mark, None)),
                 Evidence::Blocked(on) => self.waits(now, singer, task, Some(on)),
                 Evidence::Unblocked => self.waits(now, singer, task, None),
-                Evidence::Ended => self.complete(singer, task, Cleared::Completed),
+                Evidence::Ended => {
+                    // The lane is gone, not merely finished: nothing it says is awaited any more,
+                    // so its reachability clears too (a boot session replaced by the next one).
+                    self.complete(singer, task, Cleared::Completed);
+                    self.clear(singer, task, Clock::Reachability, Cleared::Completed);
+                }
             },
             Observation::Vouch {
                 about,

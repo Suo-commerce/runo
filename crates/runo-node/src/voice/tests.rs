@@ -373,7 +373,16 @@ async fn the_control_socket_sings_and_refuses() {
         refrain: Duration::from_secs(3600),
         probe: Duration::from_secs(3600),
     };
-    let node = run(&mut desk, &clock, &wall, control, timers, &mut log, async {
+    let mut ladder = crate::ladder::Ladder::open(None).unwrap();
+    let channel = crate::channel::human::Terminal::new(Vec::new());
+    let mut env = crate::run::Env {
+        clock: &clock,
+        wall: &wall,
+        log: &mut log,
+        ladder: &mut ladder,
+        channel: &channel,
+    };
+    let node = run(&mut desk, &mut env, control, timers, async {
         let _ = stop.await;
     });
     let client = async {
@@ -583,4 +592,186 @@ async fn each_peer_is_judged_by_its_own_profile() {
         .find(|(_, c, _)| *c == Clock::Reachability)
         .expect("the sentinel's silence is noticed");
     assert_eq!(first.0, 10 * MIN, "{heard:?}");
+}
+
+mod ladder {
+    use std::sync::Arc;
+
+    use runo_core::Payload;
+    use runo_core::time::Instant;
+    use runo_store::VerseReader;
+
+    use super::{MIN, at, fleet, wall};
+    use crate::channel::human::Terminal;
+    use crate::ladder::Ladder;
+    use crate::run::{Env, take};
+    use crate::voice::Voice;
+    use runo_store::mem::MemStore;
+
+    /// A clock the test moves by hand.
+    struct Hand(std::sync::atomic::AtomicU64);
+    impl runo_core::time::Clock for Hand {
+        fn now(&self) -> Instant {
+            Instant(self.0.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    /// Steps of 5 minutes from `from` to `until`: every voice but desk refrains, then each probes;
+    /// thinkpad's findings go through its ladder to `out`.
+    #[allow(clippy::too_many_arguments, reason = "a test harness")]
+    async fn steps(
+        v: &mut [Voice<MemStore>; 3],
+        from: u64,
+        until: u64,
+        desk_sings: bool,
+        ladder: &mut Ladder,
+        out: &Terminal<Vec<u8>>,
+    ) {
+        let hand = Hand(std::sync::atomic::AtomicU64::new(0));
+        let mut t = from;
+        while t <= until {
+            hand.0.store(at(t).0, std::sync::atomic::Ordering::SeqCst);
+            for (i, voice) in v.iter_mut().enumerate() {
+                if i != 1 || desk_sings {
+                    voice.refrain(&wall(at(t))).await.unwrap();
+                }
+            }
+            let now = at(t);
+            let w = wall(now);
+            let wall_fn = move || w.clone();
+            let mut log = |_: String| {};
+            let mut env = Env {
+                clock: &hand,
+                wall: &wall_fn,
+                log: &mut log,
+                ladder,
+                channel: out,
+            };
+            let h = v[0].probe(now).await.unwrap();
+            take(&mut v[0], &mut env, &h).await;
+            for voice in v.iter_mut().skip(1) {
+                voice.probe(now).await.unwrap();
+            }
+            t += 5 * MIN;
+        }
+    }
+
+    fn printed(out: Terminal<Vec<u8>>) -> Vec<String> {
+        String::from_utf8(out.into_inner())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn one_message_per_level_a_suspect_verse_and_one_all_clear() {
+        let f = fleet();
+        let mut v = super::started(&f).await;
+        let path = std::env::temp_dir().join(format!("runo-ladder-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut ladder = Ladder::open(Some(path.clone())).unwrap();
+        let out = Terminal::new(Vec::new());
+        steps(&mut v, 0, 4 * 60 * MIN, false, &mut ladder, &out).await;
+        let lines = printed(out);
+        assert_eq!(
+            lines.len(),
+            3,
+            "called, called again, suspected: {lines:#?}"
+        );
+        assert!(
+            lines[0].starts_with("desk is quiet: no word for"),
+            "{lines:#?}"
+        );
+        assert!(lines[1].starts_with("desk is still quiet"), "{lines:#?}");
+        assert!(
+            lines[2].starts_with(
+                "desk may be down (a Suspect verse was signed): no word for 1 h 30 min"
+            ),
+            "{lines:#?}"
+        );
+        assert!(lines[0].ends_with("it last said online"), "{lines:#?}");
+
+        let (records, _) = f.store.read_since(runo_store::Cursor(0)).await.unwrap();
+        let suspects: Vec<_> = records
+            .iter()
+            .filter(|r| matches!(&r.verse.payload, Payload::Suspect { about, .. } if about.singer.0 == "desk"))
+            .collect();
+        assert_eq!(suspects.len(), 1, "one Suspect verse, signed by thinkpad");
+        assert_eq!(suspects[0].verse.header.singer.0, "thinkpad");
+
+        // thinkpad restarts its ladder from the file: the same silence is not announced again.
+        let mut again = Ladder::open(Some(path.clone())).unwrap();
+        let out = Terminal::new(Vec::new());
+        steps(
+            &mut v,
+            4 * 60 * MIN + 5 * MIN,
+            5 * 60 * MIN,
+            false,
+            &mut again,
+            &out,
+        )
+        .await;
+        assert_eq!(
+            printed(out),
+            Vec::<String>::new(),
+            "nothing repeats after a restart"
+        );
+
+        // desk reboots: its old session ends, and the person hears once that it is fine.
+        let mut desk = f.voice("desk");
+        let _ = &mut desk;
+        let mut rebooted = Voice::new(
+            Arc::clone(&f.store),
+            f.keys["desk"].clone(),
+            "desk",
+            "boot-2026-11-04T14:10:00Z",
+            {
+                let mut p = f.profiles["../../profiles/goliath.toml"].clone();
+                "process".clone_into(&mut p.durability);
+                p
+            },
+            f.roster.clone(),
+        )
+        .unwrap();
+        rebooted
+            .start(
+                at(5 * 60 * MIN + 10 * MIN),
+                &wall(at(5 * 60 * MIN + 10 * MIN)),
+            )
+            .await
+            .unwrap();
+        v[1] = rebooted;
+        let out = Terminal::new(Vec::new());
+        steps(
+            &mut v,
+            5 * 60 * MIN + 10 * MIN,
+            5 * 60 * MIN + 30 * MIN,
+            true,
+            &mut again,
+            &out,
+        )
+        .await;
+        let lines = printed(out);
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert!(
+            lines[0].starts_with("desk is fine: its session ended"),
+            "{lines:#?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_peer_heard_again_gets_one_all_clear() {
+        let f = fleet();
+        let mut v = super::started(&f).await;
+        let mut ladder = Ladder::open(None).unwrap();
+        let out = Terminal::new(Vec::new());
+        steps(&mut v, 0, 70 * MIN, false, &mut ladder, &out).await;
+        steps(&mut v, 75 * MIN, 100 * MIN, true, &mut ladder, &out).await;
+        let lines = printed(out);
+        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert!(lines[0].starts_with("desk is quiet"), "{lines:#?}");
+        assert_eq!(lines[1], "desk is fine: heard again");
+    }
 }
