@@ -81,6 +81,19 @@ fn ladder(base_minutes: u64) -> Cadence {
     }
 }
 
+impl HeraldConfig {
+    /// The defaults with a lane's promise and the waiting threshold set in minutes, each
+    /// escalating at 1×, 1.5× and 2×.
+    #[must_use]
+    pub fn with_minutes(lane: u64, waiting: u64) -> Self {
+        let mut c = Self::default();
+        c.promise.cadence = ladder(lane.max(1));
+        c.promise.source = "watch, set on the command line".into();
+        c.waiting = ladder(waiting.max(1));
+        c
+    }
+}
+
 impl Default for HeraldConfig {
     /// One hour for a lane's work and for a wait, escalating at 1×, 1.5× and 2×. These are
     /// placeholders until thresholds are derived from the board's history on first start

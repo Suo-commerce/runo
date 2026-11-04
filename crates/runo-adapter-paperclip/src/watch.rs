@@ -28,6 +28,10 @@ use crate::herald::{FAILED_RUN, Herald, HeraldConfig, Signal};
 use crate::poll::{Feed, Gap, List};
 use crate::time;
 
+/// Resolved episodes kept in the ledger beyond those still owed a notice: enough history for the
+/// view and the measures, small enough for a nearly full disk (HODD Bob was at 95% on 3 Nov).
+pub const KEEP_RESOLVED: usize = 500;
+
 /// A message owed to a person.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Outgoing {
@@ -44,6 +48,7 @@ pub struct Watch {
     episodes: Episodes,
     path: PathBuf,
     base: String,
+    prefix: Option<String>,
     names: BTreeMap<String, String>,
     started: bool,
     settled: usize,
@@ -64,11 +69,18 @@ impl Watch {
             episodes: Episodes::load(&path)?,
             path,
             base: base.trim_end_matches('/').to_owned(),
+            prefix: None,
             names: BTreeMap::new(),
             started: false,
             settled: 0,
             gaps: Vec::new(),
         })
+    }
+
+    /// The company's issue prefix (such as `HOD`), so links open the board's own page:
+    /// `<board>/HOD/issues/HOD-3971`.
+    pub fn set_prefix(&mut self, prefix: &str) {
+        self.prefix = Some(prefix.trim_matches('/').to_owned()).filter(|p| !p.is_empty());
     }
 
     /// Agent names for messages and the view.
@@ -109,6 +121,7 @@ impl Watch {
             self.started = true;
             self.settled = self.episodes.settle_resolved();
         }
+        self.episodes.prune(KEEP_RESOLVED);
         self.episodes.save(&self.path)?;
         Ok(self
             .episodes
@@ -176,15 +189,21 @@ impl Watch {
             format!(" (already cleared: {})", cleared_word(why))
         });
         format!(
-            "{} · {} · {} {}: {}{cleared}\n  {}/issues/{}",
+            "{} · {} · {} {}: {}{cleared}\n  {}",
             lane.task.0,
             self.agent(&lane.singer.0),
             clock_word(n.id.clock),
             level_word(n.level),
             n.reason,
-            self.base,
-            lane.task.0
+            self.link(&lane.task.0)
         )
+    }
+
+    fn link(&self, issue: &str) -> String {
+        match &self.prefix {
+            Some(p) => format!("{}/{p}/issues/{issue}", self.base),
+            None => format!("{}/issues/{issue}", self.base),
+        }
     }
 
     /// The triage view at `now`, one screen: open episodes worst first, then what was settled

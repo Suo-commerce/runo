@@ -5,8 +5,8 @@ Watch mode (technical spec §15) reads a Paperclip board and tells a person, onc
 ## You need
 
 - The board's address, such as `https://board.example`.
-- The company id on that board (from a board URL, or the company settings).
-- An API key that can read that company's issues, runs and agents. Put it in an environment variable, never in a file or on the command line:
+- The company id on that board. `runo doctor --paperclip <board>` without `--company` lists the companies the key can open, with their ids.
+- An API key that can read that company's issues, runs and agents. A board user's key works: `npx paperclipai auth login --api-base <board>` asks you to approve it in the browser and stores it in `~/.paperclip/auth.json`. Runo only reads with it. Put it in an environment variable, never in a file you share or on the command line:
 
 ```sh
 export PAPERCLIP_API_KEY='…'
@@ -56,14 +56,14 @@ Gaps: none
 runo watch --paperclip https://board.example --company <company-id>
 ```
 
-It polls every minute (`--interval` to change), prints each new message once, and reprints the view when the open list changes. Stop it with Ctrl-C; start it again any time. It remembers what it has already told you in `~/.local/state/runo/watch/episodes.json` (`--state` to move it), so a restart repeats nothing.
+It polls every minute (`--interval` to change), prints each new message once, and reprints the view when the open list changes. Stop it with Ctrl-C; start it again any time. It remembers what it has already told you in `~/.local/state/runo/watch/episodes.json` (`--state` to move it), so a restart repeats nothing. The file keeps every open episode and the newest 500 resolved ones, so it stays small. Links in messages use the company's issue prefix (`<board>/HOD/issues/HOD-3971`).
 
 ## What the view means
 
 - **A lane** is one agent working one issue.
 - **Waits** (`blocked`, `in_review`) are never reported on sight, only when they run past the waiting threshold.
 - **A failed run** of a kind Paperclip itself never retries (21 error codes, such as `budget_exhausted` or `setup_failed`) is reported at once and listed first.
-- **The ladder:** a clock that crosses its threshold gets one more cadence of grace, then becomes *overdue*, *still overdue*, and *needs a person*. Defaults are one hour, escalating at 1×, 1.5× and 2×; `runo doctor` prints them.
+- **The ladder:** a clock that crosses its threshold gets one more cadence of grace, then becomes *overdue*, *still overdue*, and *needs a person*. Defaults are one hour, escalating at 1×, 1.5× and 2×; `runo doctor` prints them. `--lane-minutes` sets a lane's (progress and time in progress), `--waiting-minutes` a wait's: on a board where issues are often parked on dependencies, raise the waiting threshold so a deliberate dependency wait is not reported as a stall.
 - **History:** on the very first start, stalls that ended before the herald was running are kept, not sent.
 - **Gaps:** if more changed between two polls than one page holds, the view says so (`paperclip-gap`) rather than hiding what it missed.
 - **Reachability is unknown** in Watch mode: the board does not say whether a worker responds. That needs the lanes' own refrains (Chorus mode).

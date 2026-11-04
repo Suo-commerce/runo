@@ -185,3 +185,26 @@ fn a_stall_getting_worse_is_one_more_message_and_a_failure_comes_first() {
     );
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn links_open_the_boards_own_page_under_the_company_prefix() {
+    let d = dir("prefix");
+    let mut w = open(&d);
+    w.set_prefix("HOD");
+    let out = w
+        .step(
+            &page(&[issue("i2", "HOD-2", "blocked", 0)]),
+            &[],
+            10,
+            at(130),
+        )
+        .unwrap();
+    assert!(
+        out[0]
+            .text
+            .ends_with("\n  https://bob.example/HOD/issues/HOD-2"),
+        "{}",
+        out[0].text
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}

@@ -61,6 +61,18 @@ pub struct Agent {
     pub name: String,
 }
 
+/// A company as `GET /api/companies` returns it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Company {
+    /// Board id: what `--company` takes.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// The prefix of its issue identifiers and page paths, such as `HOD`.
+    pub issue_prefix: Option<String>,
+}
+
 /// One board record, normalized, at the board time it happened.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BoardEvent {

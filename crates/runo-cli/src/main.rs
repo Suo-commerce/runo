@@ -84,15 +84,21 @@ struct Board {
     /// The Paperclip board's address, such as `https://board.example`.
     #[arg(long)]
     paperclip: String,
-    /// The company id on that board.
+    /// The company id on that board; `runo doctor` without it lists the companies the key sees.
     #[arg(long)]
-    company: String,
+    company: Option<String>,
     /// The environment variable holding the API key (never the key itself).
     #[arg(long, default_value = "PAPERCLIP_API_KEY")]
     token_env: String,
     /// Rows per page; the board serves at most 1000.
     #[arg(long, default_value_t = 1000)]
     page: usize,
+    /// Minutes a lane may go without progress, or in progress, before it is overdue.
+    #[arg(long, default_value_t = 60)]
+    lane_minutes: u64,
+    /// Minutes a wait (blocked, in review) may run before it is overdue.
+    #[arg(long, default_value_t = 60)]
+    waiting_minutes: u64,
     /// Where the episode ledger lives [default: `$XDG_STATE_HOME/runo/watch`, else
     /// `~/.local/state/runo/watch`].
     #[arg(long)]
@@ -117,13 +123,16 @@ impl Board {
         let token = std::env::var(&self.token_env)
             .ok()
             .filter(|t| !t.is_empty());
-        runo_adapter_paperclip::poll::Paperclip::new(
-            &self.paperclip,
-            &self.company,
-            token,
-            self.page,
+        let company = self.company.as_deref().unwrap_or_default();
+        runo_adapter_paperclip::poll::Paperclip::new(&self.paperclip, company, token, self.page)
+            .map_err(|e| e.to_string())
+    }
+
+    fn herald(&self) -> runo_adapter_paperclip::herald::HeraldConfig {
+        runo_adapter_paperclip::herald::HeraldConfig::with_minutes(
+            self.lane_minutes,
+            self.waiting_minutes,
         )
-        .map_err(|e| e.to_string())
     }
 }
 
@@ -201,12 +210,14 @@ fn wall_now() -> runo_core::time::Instant {
 
 /// `runo doctor`: what can be reached, what would be done, every setting. Writes nothing.
 fn doctor(board: &Board) -> Result<(), String> {
-    use runo_adapter_paperclip::herald::HeraldConfig;
-    let cfg = HeraldConfig::default();
+    let cfg = board.herald();
     let minutes = |m: runo_core::Millis| m.0 / 60_000;
     println!("runo doctor · read-only: nothing is written to the board\n");
     println!("board          {}", board.paperclip);
-    println!("company        {}", board.company);
+    println!(
+        "company        {}",
+        board.company.as_deref().unwrap_or("(not given)")
+    );
     let has_key = std::env::var(&board.token_env).is_ok_and(|t| !t.is_empty());
     println!(
         "api key        ${} is {}",
@@ -230,7 +241,10 @@ fn doctor(board: &Board) -> Result<(), String> {
         cfg.promise.source
     );
     println!(
-        "waiting        the same ladder from {}m",
+        "waiting        overdue at {}m, still overdue at {}m, needs a person at {}m, after one more {}m of grace",
+        minutes(cfg.waiting.call),
+        minutes(cfg.waiting.again),
+        minutes(cfg.waiting.suspect),
         minutes(cfg.waiting.call)
     );
     println!(
@@ -249,17 +263,39 @@ fn doctor(board: &Board) -> Result<(), String> {
             Ok(v) => println!("reach          ok, Paperclip {}", v.as_deref().unwrap_or("(version not given)")),
             Err(e) => return Err(format!("cannot reach the board: {e}")),
         }
+        if board.company.is_none() {
+            let companies = client
+                .companies()
+                .await
+                .map_err(|e| format!("companies: {e}"))?;
+            println!("\ncompanies this key can open; pass one with --company <id>:");
+            for c in companies {
+                println!(
+                    "  {}  {}  ({})",
+                    c.id,
+                    c.name,
+                    c.issue_prefix.as_deref().unwrap_or("no prefix")
+                );
+            }
+            return Ok(());
+        }
+        let company = client.company().await.map_err(|e| format!("company: {e}"))?;
+        println!(
+            "company name   {} (issues {}-…)",
+            company.name,
+            company.issue_prefix.as_deref().unwrap_or("?")
+        );
         let agents = client.agents().await.map_err(|e| format!("agents: {e}"))?;
         let issues = client.issues().await.map_err(|e| format!("issues: {e}"))?;
         let runs = client.runs().await.map_err(|e| format!("runs: {e}"))?;
-        let active = issues
-            .iter()
-            .filter(|i| matches!(i.status.as_str(), "in_progress" | "blocked" | "in_review"))
-            .count();
+        let count = |s: &str| issues.iter().filter(|i| i.status == s).count();
         println!(
-            "read           {} agents, {} issues ({active} in progress, blocked or in review), {} runs",
+            "read           {} agents, {} issues ({} in progress, {} blocked, {} in review), {} runs",
             agents.len(),
             issues.len(),
+            count("in_progress"),
+            count("blocked"),
+            count("in_review"),
             runs.len()
         );
         if issues.len() >= client.page() || runs.len() >= client.page() {
@@ -271,7 +307,6 @@ fn doctor(board: &Board) -> Result<(), String> {
 
 /// `runo watch`: poll, step, deliver, repeat.
 fn watch(board: &Board, notify: &str, interval: u64, once: bool) -> Result<(), String> {
-    use runo_adapter_paperclip::herald::HeraldConfig;
     use runo_adapter_paperclip::poll::PollError;
     use runo_adapter_paperclip::watch::Watch;
     use runo_node::channel::human::{HumanChannel, Terminal};
@@ -281,16 +316,26 @@ fn watch(board: &Board, notify: &str, interval: u64, once: bool) -> Result<(), S
             "--notify {notify}: only `terminal` is available so far"
         ));
     }
+    if board.company.is_none() {
+        return Err("--company <id> is needed; `runo doctor` without it lists the ids".into());
+    }
     let client = board.client()?;
     let dir = board.state_dir();
-    let mut w =
-        Watch::open(HeraldConfig::default(), &dir, &board.paperclip).map_err(|e| e.to_string())?;
+    let mut w = Watch::open(board.herald(), &dir, &board.paperclip).map_err(|e| e.to_string())?;
     let channel = Terminal::new(std::io::stdout());
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
         match client.agents().await {
             Ok(a) => w.set_agents(&a),
             Err(e) => eprintln!("runo watch: no agent names ({e}); showing ids"),
+        }
+        match client.company().await {
+            Ok(c) => {
+                if let Some(p) = &c.issue_prefix {
+                    w.set_prefix(p);
+                }
+            }
+            Err(e) => eprintln!("runo watch: no issue prefix ({e}); links omit it"),
         }
         let mut wait = interval.max(5);
         let mut last_open = None;
