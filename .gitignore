@@ -8,6 +8,6 @@
 
 # TLC scratch
 model/states/
-model/*_TTrace_*.tla
+model/*_TTrace_*
 model/tla2tools.jar
 __pycache__/
