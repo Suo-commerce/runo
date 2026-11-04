@@ -1,5 +1,6 @@
 # A model-free sentinel on separate hardware: the cheapest independent voice
 role = "sentinel"
+refrain_interval = "5m"            # its own silence must be noticed too
 probe_interval = "30s"
 durability     = "host"
 
