@@ -44,6 +44,7 @@ pub struct Timestamp(pub String);
 
 /// A reference to state kept outside the song: `scheme://path` plus its content hash.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Ref {
     /// `taso`, `file`, `git`, …
     pub scheme: String,
@@ -59,6 +60,7 @@ pub struct Millis(pub u64);
 
 /// The singer's last durable commit.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Progress {
     /// Monotonic height of durable work.
     pub height: u64,
@@ -68,6 +70,7 @@ pub struct Progress {
 
 /// Absolute escalation durations, computed at claim time (spec §5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cadence {
     /// Call after this long.
     pub call: Millis,
@@ -79,6 +82,7 @@ pub struct Cadence {
 
 /// What a singer promises when it claims work.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Promise {
     /// Unit type, e.g. `siege_tank`.
     pub unit: String,
@@ -92,6 +96,7 @@ pub struct Promise {
 
 /// What a task delivers, for the usefulness level.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskSpec {
     /// One line on what the task delivers.
     pub deliver: String,
@@ -103,6 +108,7 @@ pub struct TaskSpec {
 
 /// The full identity of the verse or voice a peer verse concerns.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct About {
     /// The singer concerned.
     pub singer: SingerId,
@@ -129,6 +135,7 @@ pub enum Clock {
 
 /// How a peer confirmed another is reachable.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum VouchHow {
     /// A direct probe reply bound to a challenge.
     Direct,
@@ -164,6 +171,7 @@ pub enum Verdict {
 
 /// A resource's acknowledgement that a fence is installed and durable.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceAck {
     /// Which resource.
     pub resource: ResourceId,
@@ -175,6 +183,7 @@ pub struct ResourceAck {
 
 /// The header every verse carries.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Header {
     /// Protocol version; readers accept `v <= PROTOCOL_VERSION` and reject unknown fields.
     pub v: u8,
@@ -204,7 +213,7 @@ pub struct Header {
 
 /// The kinds of verse (spec §4). Later kinds are reserved, not present.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Payload {
     // self
     /// Work is claimed, with a promise.
@@ -318,6 +327,7 @@ pub enum Payload {
 
 /// Hash and signature over a verse.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Seal {
     /// blake3 of the canonical bytes of header and payload.
     pub sum: VerseId,
@@ -328,6 +338,7 @@ pub struct Seal {
 
 /// One immutable, signed record.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Verse {
     /// The header.
     pub header: Header,
@@ -339,6 +350,7 @@ pub struct Verse {
 
 /// The refrain: repeated while a task is worked; reachability only, never progress.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Refrain {
     /// Who.
     pub singer: SingerId,
@@ -361,6 +373,7 @@ pub struct Refrain {
 
 /// A voice in the roster.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VoiceEntry {
     /// Its identity.
     pub singer: SingerId,
@@ -376,6 +389,7 @@ pub struct VoiceEntry {
 
 /// Declared failure domains (spec §6: declared, not proven).
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Domains {
     /// Host name.
     pub host: String,
@@ -389,6 +403,7 @@ pub struct Domains {
 
 /// The roster document, stored as a blob.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RosterDoc {
     /// Version.
     pub version: RosterVersion,
@@ -404,6 +419,7 @@ pub struct RosterDoc {
 
 /// Key identifying one chain.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChainKey {
     /// Singer.
     pub singer: SingerId,
@@ -415,6 +431,7 @@ pub struct ChainKey {
 
 /// Where a chain ended at closure.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChainEnd {
     /// Singer.
     pub singer: SingerId,
@@ -428,6 +445,7 @@ pub struct ChainEnd {
 
 /// Written by the allocator at `Close`; immutable (technical spec §3, §9).
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClosureSnapshot {
     /// The task.
     pub task: TaskId,

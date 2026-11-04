@@ -9,6 +9,7 @@ Files
     export-paperclip.sh   Postgres -> CSV, one file per table (psql, read-only SELECTs)
     export-forgejo.py     Forgejo API -> CSV: PRs, reviews, comments, CI statuses (GET only)
     replay.py             the Core clocks + gray-work signals over the CSVs (Python 3, stdlib)
+    read-song.py          reads a Runo chorus's song.jsonl and checks every chain (Python 3, stdlib)
 
 ## 1. Export Paperclip
 

@@ -16,7 +16,10 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 
     [dev-dependencies]
+    runo-testkit = { workspace = true }
+    tokio = { workspace = true }
 
