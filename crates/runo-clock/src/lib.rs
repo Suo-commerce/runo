@@ -183,6 +183,10 @@ pub struct Config {
     pub owner: Option<SingerId>,
     /// Declared failure domains, for weighting vouches.
     pub domains: BTreeMap<SingerId, Domains>,
+    /// The reachability cadence while a peer's last declared state is one of these, such as a
+    /// machine's `sleep`: declared silence changes the expectation, it never switches the clock
+    /// off (technical spec §14, milestone 4).
+    pub declared: BTreeMap<String, Cadence>,
 }
 
 /// One clock as the view shows it.
@@ -214,6 +218,8 @@ pub struct Row {
     pub clocks: [ClockState; 4],
     /// What it is blocked on, if anything.
     pub blocked_on: Option<String>,
+    /// Its last declared state (the event of its latest boundary), if any.
+    pub state: Option<String>,
     /// Voices that sang `Suspect` about it.
     pub suspected_by: BTreeSet<SingerId>,
 }
@@ -259,6 +265,7 @@ struct PeerClocks {
     task: Option<TaskClock>,
     waiting_since: Option<Instant>,
     blocked_on: Option<String>,
+    state: Option<String>,
     level: [Level; 4],
     vouch_weight: u8,
     vouches: Vec<(SingerId, Instant)>,
@@ -383,6 +390,7 @@ impl Chorus {
                     })
                 }),
                 blocked_on: p.blocked_on.clone(),
+                state: p.state.clone(),
                 suspected_by: p.suspected_by.clone(),
             })
             .collect()
@@ -456,6 +464,7 @@ impl Chorus {
                     task,
                     (v.header.progress.height, v.header.progress.head),
                 );
+                self.entry(peer, task).state = Some(event.clone());
                 if self.config.terminal.contains(event) {
                     self.complete(peer, task, Cleared::Completed);
                 } else {
@@ -612,7 +621,12 @@ fn running(
 ) -> Option<(Millis, Cadence)> {
     match clock {
         Clock::Reachability => {
-            let cadence = config.reachability?;
+            let cadence = p
+                .state
+                .as_ref()
+                .and_then(|s| config.declared.get(s))
+                .copied()
+                .or(config.reachability)?;
             p.task.as_ref()?;
             Some((ms(now.0.saturating_sub(p.reach_since?.0)), cadence))
         }

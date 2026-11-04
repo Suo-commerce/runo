@@ -1,6 +1,7 @@
 //! The `runo` binary (technical spec §11, §15). Three tiers: diagnose, watch, chorus.
 
 mod chorus;
+mod node;
 
 use clap::{Parser, Subcommand};
 
@@ -65,17 +66,42 @@ enum Cmd {
         #[arg(long)]
         credential: Option<String>,
     },
-    /// Tier 3: run a voice.
+    /// Tier 3: run a voice. It claims a boot session, declares the profile's first state,
+    /// refrains and listens until stopped.
     Node {
+        /// Singer id, as enrolled.
+        #[arg(long)]
+        singer: String,
         /// Profile path.
         #[arg(long)]
-        profile: String,
+        profile: std::path::PathBuf,
+        /// The chorus directory holding the signed roster.
+        #[arg(long)]
+        chorus: std::path::PathBuf,
+        /// The store: its Unix socket path, or `tcp:host:port`.
+        #[arg(long)]
+        store: String,
+        /// The owner's public key as `runo init --sign` printed it; a roster signed by any other
+        /// key is refused.
+        #[arg(long)]
+        owner_key: Option<String>,
+        /// The control socket [default: `$XDG_RUNTIME_DIR/runo/<singer>.sock`].
+        #[arg(long)]
+        control: Option<std::path::PathBuf>,
     },
-    /// Sing one verse through the local node (or record-only to the store).
+    /// Declare a state through the running node: `runo sing sleep`, `runo sing wake`.
     Sing {
-        /// Verse kind and arguments; see `runo sing --help`.
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
+        /// The state, as named in the profile.
+        event: String,
+        /// The singer whose node to ask.
+        #[arg(long)]
+        singer: String,
+        /// What it waits on, with `waiting`.
+        #[arg(long)]
+        blocked_on: Option<String>,
+        /// The node's control socket [default: `$XDG_RUNTIME_DIR/runo/<singer>.sock`].
+        #[arg(long)]
+        control: Option<std::path::PathBuf>,
     },
     /// Latest verse and refrain per voice, four clocks, suspicion.
     Listen {
@@ -490,6 +516,38 @@ fn main() {
             chorus,
             sign,
         } => exit_on(chorus::init(&manifest, &chorus, sign), "init", 4),
+        Cmd::Node {
+            singer,
+            profile,
+            chorus,
+            store,
+            owner_key,
+            control,
+        } => {
+            let control = node::control_path(&singer, control);
+            exit_on(
+                node::node(&node::NodeArgs {
+                    singer: &singer,
+                    profile: &profile,
+                    chorus: &chorus,
+                    store: &store,
+                    owner_key: owner_key.as_deref(),
+                    control,
+                }),
+                "node",
+                5,
+            );
+        }
+        Cmd::Sing {
+            event,
+            singer,
+            blocked_on,
+            control,
+        } => exit_on(
+            node::sing(&node::control_path(&singer, control), &event, blocked_on),
+            "sing",
+            5,
+        ),
         other => println!(
             "{other:?}: not yet implemented; see the technical specification §14 for its milestone"
         ),
