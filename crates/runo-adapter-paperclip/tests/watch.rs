@@ -74,7 +74,7 @@ fn a_first_start_sends_what_is_stuck_now_and_keeps_history_quiet() {
         "HOD-2 · Bob · waiting needs a person: blocked on the board, past the waiting threshold\n  https://bob.example/issues/HOD-2"
     );
     let view = w.view(at(300));
-    assert!(view.contains("Open (1), worst first"), "{view}");
+    assert!(view.contains("Open lanes: 1, worst first"), "{view}");
     assert!(
         view.contains("Resolved: 1 (1 before the herald started"),
         "{view}"
@@ -282,14 +282,97 @@ fn the_view_fits_one_screen() {
     let out = w.step(&page(&rows), &[], &[], 100, at(200)).unwrap();
     assert_eq!(out.len(), 30, "each lane is still its own message");
     let view = w.view(at(200));
-    assert!(view.contains("Open (30)"), "{view}");
-    assert!(view.contains("  … and 5 more: 5 waiting"), "{view}");
+    assert!(view.contains("Open lanes: 30,"), "{view}");
+    assert!(
+        view.contains("  … and 5 more lanes in 5 rows: 5 waiting"),
+        "{view}"
+    );
     assert_eq!(
         view.lines()
             .filter(|l| l.starts_with("  needs a person"))
             .count(),
         25,
         "{view}"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn waits_are_grouped_by_the_issue_that_blocks_them() {
+    let d = dir("groups");
+    let mut w = open(&d);
+    let mut rows: Vec<String> = (1..=3)
+        .map(|n| {
+            blocked(
+                &format!("i{n}"),
+                &format!("HOD-{n}"),
+                "needs_attention",
+                "null",
+                0,
+                0,
+            )
+        })
+        .collect();
+    rows.push(issue("i9", "HOD-9", "blocked", 0));
+    let failed: Vec<Run> = serde_json::from_str(&format!(
+        r#"[{{"id":"0123456789abcdef","agentId":"ag-1","issueId":"i9","status":"failed","livenessState":"failed",
+            "errorCode":"budget_exhausted","createdAt":"{}","finishedAt":"{}"}}]"#,
+        stamp(100),
+        stamp(110)
+    ))
+    .unwrap();
+    let out = w.step(&page(&rows), &[], &failed, 10, at(200)).unwrap();
+    assert_eq!(out.len(), 5, "every lane is still its own message: {out:?}");
+    let view = w.view(at(200));
+    let open: Vec<&str> = view
+        .lines()
+        .skip_while(|l| !l.starts_with("Open lanes"))
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .collect();
+    assert_eq!(
+        open.len(),
+        3,
+        "a failure, one group, one lone wait:\n{view}"
+    );
+    assert!(
+        open[0].contains("failed run 01234567: budget_exhausted"),
+        "short run id, first: {view}"
+    );
+    assert!(
+        open[1].contains("HOD-7 holds 3 lanes (HOD-1 HOD-2 HOD-3), oldest ")
+            && open[1].ends_with(": blocked and needs attention; nobody is named to unblock it"),
+        "{view}"
+    );
+    assert!(open[2].contains("HOD-9"), "{view}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_dependency_wait_is_not_a_failure() {
+    let d = dir("depwait");
+    let mut w = open(&d);
+    let runs: Vec<Run> = serde_json::from_str(&format!(
+        r#"[{{"id":"r1","agentId":"ag-1","issueId":"i1","status":"cancelled","livenessState":"blocked",
+            "errorCode":"issue_dependencies_blocked","livenessReason":"Cancelled because issue dependencies are still blocked; Paperclip will wake the assignee when blockers resolve",
+            "createdAt":"{}","finishedAt":"{}"}}]"#,
+        stamp(1),
+        stamp(2)
+    ))
+    .unwrap();
+    let out = w
+        .step(
+            &page(&[issue("i1", "HOD-1", "in_progress", 0)]),
+            &[],
+            &runs,
+            10,
+            at(30),
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        [],
+        "Paperclip wakes the assignee itself when the blockers resolve"
     );
     std::fs::remove_dir_all(&d).unwrap();
 }
