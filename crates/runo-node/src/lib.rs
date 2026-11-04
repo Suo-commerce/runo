@@ -4,6 +4,8 @@
 pub mod channel;
 pub mod episodes;
 pub mod identity;
+pub mod run;
+pub mod voice;
 
 use async_trait::async_trait;
 use runo_core::{Clock, Epoch, SingerId, TaskId};

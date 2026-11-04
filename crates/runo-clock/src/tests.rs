@@ -130,6 +130,7 @@ fn config(reachability: bool) -> Config {
         terminal: BTreeSet::from(["done".to_string(), "failed".to_string()]),
         owner: Some(s("owner")),
         domains: BTreeMap::new(),
+        declared: BTreeMap::new(),
     }
 }
 
@@ -640,5 +641,52 @@ fn inference_never_proves_reachability() {
     assert!(
         levels(&c.tick(at(500)), Clock::Reachability).is_empty(),
         "no evidence of reachability, so nothing to time"
+    );
+}
+
+/// Milestone 4: declared sleep changes the reachability expectation; it does not switch the
+/// clock off, and undeclared silence still escalates on the usual cadence.
+#[test]
+fn declared_sleep_lengthens_reachability_and_undeclared_silence_does_not() {
+    let day = Cadence {
+        call: Millis(24 * 60 * 60_000),
+        again: Millis(36 * 60 * 60_000),
+        suspect: Millis(48 * 60 * 60_000),
+    };
+    let mut cfg = config(true);
+    cfg.declared = BTreeMap::from([("sleep".to_string(), day)]);
+    let mut c = Chorus::new(cfg);
+    see(&mut c, at(0), &claimed("a", 1, false));
+    see(&mut c, at(0), &claimed("b", 1, false));
+    see(&mut c, at(1), &boundary("a", 1, "sleep", None));
+    let e = c.tick(at(120));
+    let reach: Vec<&SingerId> = e
+        .iter()
+        .filter(|x| x.clock == Clock::Reachability)
+        .map(|x| &x.peer)
+        .collect();
+    assert!(
+        reach.iter().all(|p| p.0 == "b"),
+        "only the machine that went quiet without saying so: {e:?}"
+    );
+    assert!(!reach.is_empty(), "b's silence escalates: {e:?}");
+    let rows = c.rows(at(120));
+    let a = rows.iter().find(|r| r.peer.0 == "a").unwrap();
+    assert_eq!(a.state.as_deref(), Some("sleep"));
+    assert!(
+        matches!(
+            a.clocks[0],
+            ClockState::Running {
+                level: Level::Quiet,
+                ..
+            }
+        ),
+        "asleep, reachability still runs, on the day cadence: {a:?}"
+    );
+    let late = c.tick(at(24 * 60 + 1));
+    assert!(
+        late.iter()
+            .any(|x| x.peer.0 == "a" && x.clock == Clock::Reachability),
+        "a day's silence even while asleep is noticed: {late:?}"
     );
 }
