@@ -19,18 +19,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use ed25519_dalek::SigningKey;
-use runo_clock::{Chorus, Config, Escalation, Evidence, Observation, Resolution, Row};
+use runo_clock::{Chorus, Config, Escalation, Evidence, Observation, PeerCadence, Resolution, Row};
 use runo_core::fence::Durability;
-use runo_core::ingress::{Decision, RecordClass, RejectReason, RosterHistory, admit};
-use runo_core::sign::{seal, sign_refrain, verify_refrain};
+use runo_core::ingress::{Decision, RejectReason};
+use runo_core::sign::{seal, sign_refrain};
 use runo_core::time::Instant;
 use runo_core::{
-    Cadence, Epoch, Header, Millis, Payload, Progress, Promise, Refrain, RosterDoc, RosterVersion,
-    SingerId, TaskId, TaskSpec, Timestamp, Verse, VerseId,
+    Cadence, Epoch, Header, Millis, Payload, Progress, Promise, Refrain, RosterDoc, SingerId,
+    TaskId, TaskSpec, Timestamp, VerseId,
 };
 use runo_profile::Profile;
-use runo_store::mem::MemStore;
-use runo_store::{Cursor, RefrainSlot, StoreError, VerseReader, VerseWriter};
+use runo_store::{RefrainSlot, StoreError, VerseReader, VerseWriter};
+
+use crate::listener::Listener;
 
 /// A voice's failure.
 #[derive(Debug, thiserror::Error)]
@@ -67,18 +68,6 @@ pub struct Heard {
 
 /// The state a voice declares when it is blocked; it refrains through it.
 const WAITING: &str = "waiting";
-
-/// A roster history of one version: Core's runs are fixed for their duration.
-struct Rosters(RosterDoc);
-
-impl RosterHistory for Rosters {
-    fn at(&self, v: RosterVersion) -> Option<&RosterDoc> {
-        (v == self.0.version).then_some(&self.0)
-    }
-    fn current(&self) -> RosterVersion {
-        self.0.version
-    }
-}
 
 /// `"90s"`, `"15m"`, `"2h"`, `"1d"` to milliseconds.
 ///
@@ -181,7 +170,25 @@ pub fn clock_config(profile: &Profile, roster: &RosterDoc) -> Result<Config, Voi
             .map(|v| (v.singer.clone(), v.domains.clone()))
             .collect(),
         declared,
+        peers: BTreeMap::new(),
     })
+}
+
+/// A peer's own expectations from its own profile: what [`clock_config`] would give it for
+/// reachability and declared states.
+///
+/// # Errors
+/// A bad interval or an overflowing cadence.
+pub fn peer_cadence(profile: &Profile, roster: &RosterDoc) -> Result<PeerCadence, VoiceError> {
+    let c = clock_config(profile, roster)?;
+    Ok(PeerCadence {
+        reachability: c.reachability,
+        declared: c.declared,
+    })
+}
+
+fn listens(listen: &BTreeSet<String>, roles: &BTreeMap<SingerId, String>, s: &SingerId) -> bool {
+    listen.contains("*") || roles.get(s).is_some_and(|r| listen.contains(r))
 }
 
 /// One voice.
@@ -192,19 +199,14 @@ pub struct Voice<S: ?Sized> {
     task: TaskId,
     profile: Profile,
     durability: Durability,
-    rosters: Rosters,
+    listener: Listener,
     roles: BTreeMap<SingerId, String>,
     listen: BTreeSet<String>,
-    mirror: MemStore,
-    cursor: Cursor,
     chorus: Chorus,
     seq: u64,
     last: Option<VerseId>,
     refrain_n: u64,
     state: Option<String>,
-    pending: Vec<Verse>,
-    /// The highest refrain verified per peer and task, so an unchanged slot is not re-verified.
-    verified: BTreeMap<(SingerId, TaskId), u64>,
     /// Each peer's latest boot session: a machine runs one at a time.
     sessions: BTreeMap<SingerId, TaskId>,
 }
@@ -253,18 +255,33 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
                 .collect(),
             profile,
             durability,
-            rosters: Rosters(roster),
-            mirror: MemStore::new(),
-            cursor: Cursor(0),
+            listener: Listener::new(roster),
             chorus: Chorus::new(config),
             seq: 0,
             last: None,
             refrain_n: 0,
             state: None,
-            pending: Vec::new(),
-            verified: BTreeMap::new(),
             sessions: BTreeMap::new(),
         })
+    }
+
+    /// Judge each listed peer by its own profile instead of this voice's (a sentinel that
+    /// refrains every 5 minutes is missed sooner than a laptop). Call before [`Voice::start`].
+    ///
+    /// # Errors
+    /// A peer's profile has an unusable cadence.
+    pub fn with_peers(mut self, peers: &BTreeMap<SingerId, Profile>) -> Result<Self, VoiceError> {
+        let roster = self.listener.roster();
+        let mut config = clock_config(&self.profile, roster)?;
+        for (singer, p) in peers {
+            if *singer != self.me {
+                config
+                    .peers
+                    .insert(singer.clone(), peer_cadence(p, roster)?);
+            }
+        }
+        self.chorus = Chorus::new(config);
+        Ok(self)
     }
 
     /// The boot session this voice sings on.
@@ -399,28 +416,12 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
     /// The store fails.
     pub async fn probe(&mut self, now: Instant) -> Result<Heard, VoiceError> {
         let mut heard = self.read(now).await?;
-        for r in self.store.latest_refrains().await? {
-            let slot = (r.singer.clone(), r.task.clone());
-            if r.singer == self.me
-                || !self.listens_to(&r.singer)
-                || self.verified.get(&slot).is_some_and(|&n| r.n <= n)
-            {
-                continue;
-            }
-            let Some(v) = self.rosters.0.voices.iter().find(|v| v.singer == r.singer) else {
-                heard
-                    .incidents
-                    .push((r.singer.clone(), RejectReason::UnknownSinger));
-                continue;
-            };
-            if verify_refrain(&r, &v.key).is_err() {
-                heard
-                    .incidents
-                    .push((r.singer.clone(), RejectReason::BadSig));
-                continue;
-            }
-            self.verified.insert(slot, r.n);
-            self.chorus.observe(now, &self.me, Observation::Refrain(&r));
+        let (me, roles, listen) = (&self.me, &self.roles, &self.listen);
+        let skip = |s: &SingerId| s == me || !listens(listen, roles, s);
+        let (fresh, incidents) = self.listener.refrains(&*self.store, skip).await?;
+        heard.incidents.extend(incidents);
+        for r in &fresh {
+            self.chorus.observe(now, &self.me, Observation::Refrain(r));
         }
         heard.escalations = self.chorus.tick(now);
         heard.resolutions = self.chorus.take_resolutions();
@@ -434,11 +435,7 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
     }
 
     fn listens_to(&self, singer: &SingerId) -> bool {
-        self.listen.contains("*")
-            || self
-                .roles
-                .get(singer)
-                .is_some_and(|r| self.listen.contains(r))
+        listens(&self.listen, &self.roles, singer)
     }
 
     fn allowed(&self, from: &str, to: &str) -> bool {
@@ -449,59 +446,24 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
             .any(|(a, b)| (a == from || a == "*") && (b == to || (b == "*" && from == "waiting")))
     }
 
-    /// Admit pending and new records against the mirror; observe the listened ones.
+    /// Admit what is new; observe the current records of the voices this one listens to.
     async fn read(&mut self, now: Instant) -> Result<Heard, VoiceError> {
-        let mut heard = Heard::default();
-        loop {
-            let (records, next) = self.store.read_since(self.cursor).await?;
-            if records.is_empty() {
-                break;
+        let admitted = self.listener.read(&*self.store).await?;
+        for verse in &admitted.current {
+            let singer = &verse.header.singer;
+            if *singer == self.me || !self.listens_to(singer) {
+                continue;
             }
-            self.cursor = next;
-            let mut batch = std::mem::take(&mut self.pending);
-            batch.extend(records.into_iter().map(|r| r.verse));
-            for verse in batch {
-                self.take(now, verse, &mut heard).await?;
-            }
-        }
-        Ok(heard)
-    }
-
-    async fn take(
-        &mut self,
-        now: Instant,
-        verse: Verse,
-        heard: &mut Heard,
-    ) -> Result<(), VoiceError> {
-        let decision = admit(&verse, &self.rosters, &self.mirror);
-        let class = match decision {
-            Decision::Stored { .. } => return Ok(()),
-            Decision::Pending { .. } => {
-                self.pending.push(verse);
-                return Ok(());
-            }
-            Decision::Reject(why) => {
-                heard.incidents.push((verse.header.singer.clone(), why));
-                return Ok(());
-            }
-            Decision::Append { .. } => RecordClass::Current,
-            Decision::History => RecordClass::History,
-            Decision::Control => RecordClass::Control,
-        };
-        match class {
-            RecordClass::Current => self.mirror.append(&verse, Durability::Process).await?,
-            RecordClass::History => self.mirror.archive(&verse, Durability::Process).await?,
-            RecordClass::Control => self.mirror.record(&verse, Durability::Process).await?,
-        };
-        let singer = verse.header.singer.clone();
-        if singer != self.me && class == RecordClass::Current && self.listens_to(&singer) {
             self.chorus
-                .observe(now, &self.me, Observation::Verse(&verse));
+                .observe(now, &self.me, Observation::Verse(verse));
             if matches!(verse.payload, Payload::Claimed { .. }) {
-                self.new_session(now, &singer, &verse.header.task);
+                self.new_session(now, singer, &verse.header.task);
             }
         }
-        Ok(())
+        Ok(Heard {
+            incidents: admitted.incidents,
+            ..Heard::default()
+        })
     }
 
     /// A peer claimed a new boot session: its previous one ended, whether or not it sang
@@ -525,7 +487,7 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
         let header = Header {
             v: 3,
             singer: self.me.clone(),
-            roster: self.rosters.0.version,
+            roster: self.listener.roster().version,
             task: self.task.clone(),
             epoch: Epoch(0),
             grant: None,
@@ -541,12 +503,12 @@ impl<S: VerseReader + VerseWriter + RefrainSlot + ?Sized> Voice<S> {
         };
         let verse =
             seal(&self.key, header, payload).map_err(|e| VoiceError::Setup(e.to_string()))?;
-        match admit(&verse, &self.rosters, &self.mirror) {
+        match self.listener.check(&verse) {
             Decision::Append { .. } => {}
             other => return Err(VoiceError::Refused(other)),
         }
         self.store.append(&verse, self.durability).await?;
-        self.mirror.append(&verse, Durability::Process).await?;
+        self.listener.mirror_own(&verse).await?;
         self.seq += 1;
         self.last = Some(verse.seal.sum);
         Ok(verse.seal.sum)

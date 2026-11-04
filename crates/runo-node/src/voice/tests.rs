@@ -105,13 +105,14 @@ impl Fleet {
     }
 }
 
+/// The test's start, 2026-11-04 09:00 UTC, as a wall instant.
+fn base() -> Instant {
+    runo_core::time::wall::parse("2026-11-04T09:00:00Z").unwrap()
+}
+
+/// The wall time `t` after the test's start.
 fn wall(t: Instant) -> Timestamp {
-    let m = t.0 / 1_000_000 / MIN;
-    Timestamp(format!(
-        "2026-11-04T{:02}:{:02}:00Z",
-        9 + m / 60 % 15,
-        m % 60
-    ))
+    Timestamp(runo_core::time::wall::format(Instant(base().0 + t.0)))
 }
 
 fn about(heard: &Heard, peer: &str) -> Vec<(Clock, Level)> {
@@ -170,6 +171,39 @@ async fn run(
         t += step * MIN;
     }
     heard
+}
+
+/// Appends a verse claiming to be desk's next, signed by a key that is not desk's.
+async fn forge(f: &Fleet) {
+    let impostor = generate();
+    let header = Header {
+        v: 3,
+        singer: SingerId("desk".into()),
+        roster: f.roster.version,
+        task: TaskId("boot-2026-11-04T09:00:00Z".into()),
+        epoch: Epoch(0),
+        grant: None,
+        seq: 2,
+        prev: None,
+        cause: None,
+        progress: Progress {
+            height: 2,
+            head: None,
+        },
+        sung_at: wall(at(MIN)),
+        note: None,
+    };
+    let forged = seal(
+        &impostor,
+        header,
+        Payload::Boundary {
+            event: "going-offline".into(),
+            state: None,
+            blocked_on: None,
+        },
+    )
+    .unwrap();
+    f.store.append(&forged, Durability::Process).await.unwrap();
 }
 
 #[test]
@@ -299,35 +333,7 @@ async fn a_transition_the_profile_does_not_allow_is_refused_before_it_is_sung() 
 async fn a_forged_verse_is_an_incident_not_an_observation() {
     let f = fleet();
     let mut v = started(&f).await;
-    let impostor = generate();
-    let header = Header {
-        v: 3,
-        singer: SingerId("desk".into()),
-        roster: f.roster.version,
-        task: TaskId("boot-2026-11-04T09:00:00Z".into()),
-        epoch: Epoch(0),
-        grant: None,
-        seq: 2,
-        prev: None,
-        cause: None,
-        progress: Progress {
-            height: 2,
-            head: None,
-        },
-        sung_at: wall(at(MIN)),
-        note: None,
-    };
-    let forged = seal(
-        &impostor,
-        header,
-        Payload::Boundary {
-            event: "going-offline".into(),
-            state: None,
-            blocked_on: None,
-        },
-    )
-    .unwrap();
-    f.store.append(&forged, Durability::Process).await.unwrap();
+    forge(&f).await;
     let heard = v[0].probe(at(MIN)).await.unwrap();
     assert_eq!(heard.incidents.len(), 1, "{:?}", heard.incidents);
     assert_eq!(heard.incidents[0].0.0, "desk");
@@ -436,4 +442,145 @@ async fn a_reboot_ends_the_old_session_without_a_call() {
         ["boot-2026-11-04T09:15:00Z"],
         "one session per machine in the view"
     );
+}
+
+mod view {
+    use std::collections::BTreeMap;
+
+    use runo_clock::Level;
+    use runo_core::time::Instant;
+
+    use super::{MIN, at, base, fleet, run, started, wall};
+    use crate::fleet::{Fleet, Line, Verdict, render};
+    use crate::listener::Listener;
+
+    fn view(f: &super::Fleet) -> Fleet {
+        let profiles = f
+            .roster
+            .voices
+            .iter()
+            .map(|v| (v.singer.clone(), f.profiles[&f.paths[&v.singer.0]].clone()))
+            .collect::<BTreeMap<_, _>>();
+        Fleet::new(Listener::new(f.roster.clone()), profiles).unwrap()
+    }
+
+    fn now(ms: u64) -> Instant {
+        Instant(base().0 + at(ms).0)
+    }
+
+    fn verdicts(lines: &[Line]) -> Vec<(&str, &Verdict)> {
+        lines
+            .iter()
+            .map(|l| (l.singer.0.as_str(), &l.verdict))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn problems_first_then_up_then_resting_then_offline() {
+        let f = fleet();
+        let mut v = started(&f).await;
+        v[1].sing(at(0), &wall(at(0)), "sleep", None).await.unwrap();
+        // thinkpad refrains; sentinel goes silent at the start without a word.
+        let _ = run(&mut v, 0, 60 * MIN, 5, |i, _| i == 0, "desk").await;
+        let mut fv = view(&f);
+        fv.update(&*f.store).await.unwrap();
+        let lines = fv.lines(now(60 * MIN));
+        assert_eq!(
+            lines.len(),
+            3,
+            "the owner has no machine cadence: {lines:?}"
+        );
+        let got = verdicts(&lines);
+        assert!(
+            matches!(got[0], ("sentinel", Verdict::Quiet { level, .. }) if *level >= Level::Called),
+            "a silent sentinel is first: {got:?}"
+        );
+        assert_eq!(got[1], ("thinkpad", &Verdict::Up));
+        assert!(
+            matches!(got[2], ("desk", Verdict::Resting { .. })),
+            "{got:?}"
+        );
+
+        v[0].sing(at(61 * MIN), &wall(at(61 * MIN)), "state-saved", None)
+            .await
+            .unwrap();
+        v[0].sing(at(61 * MIN), &wall(at(61 * MIN)), "going-offline", None)
+            .await
+            .unwrap();
+        fv.update(&*f.store).await.unwrap();
+        let lines = fv.lines(now(62 * MIN));
+        assert_eq!(verdicts(&lines)[2], ("thinkpad", &Verdict::Offline));
+        let text = render("goliath", &lines, fv.incidents(), now(62 * MIN));
+        assert!(
+            text.starts_with("runo view · goliath · 2026-11-04 10:02 UTC"),
+            "{text}"
+        );
+        assert!(text.contains("sentinel  QUIET 1 h 02 min"), "{text}");
+        assert!(text.contains("sleep since 09:00, as it said"), "{text}");
+        assert!(text.contains("offline since 10:01, as it said"), "{text}");
+        assert!(text.ends_with("incidents: none\n"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_long_sleep_is_called_and_a_machine_never_heard_says_so() {
+        let f = fleet();
+        let mut desk = f.voice("desk");
+        desk.start(at(0), &wall(at(0))).await.unwrap();
+        desk.sing(at(0), &wall(at(0)), "sleep", None).await.unwrap();
+        let mut fv = view(&f);
+        fv.update(&*f.store).await.unwrap();
+        let lines = fv.lines(now(25 * 60 * MIN));
+        let got = verdicts(&lines);
+        assert!(
+            matches!(got[0], ("desk", Verdict::Quiet { .. })),
+            "a day and an hour asleep: {got:?}"
+        );
+        assert_eq!(
+            got[1..],
+            [
+                ("sentinel", &Verdict::NeverSung),
+                ("thinkpad", &Verdict::NeverSung)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forged_record_is_an_incident_on_the_view() {
+        let f = fleet();
+        let _v = started(&f).await;
+        super::forge(&f).await;
+        let mut fv = view(&f);
+        fv.update(&*f.store).await.unwrap();
+        let lines = fv.lines(now(MIN));
+        assert!(
+            lines.iter().all(|l| l.verdict == Verdict::Up),
+            "the forgery took nobody offline: {lines:?}"
+        );
+        let text = render("goliath", &lines, fv.incidents(), now(MIN));
+        assert!(text.contains("incidents: 1 records refused"), "{text}");
+        assert!(text.contains("claiming to be desk"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn each_peer_is_judged_by_its_own_profile() {
+    let f = fleet();
+    let peers: BTreeMap<SingerId, Profile> = f
+        .roster
+        .voices
+        .iter()
+        .map(|v| (v.singer.clone(), f.profiles[&f.paths[&v.singer.0]].clone()))
+        .collect();
+    let thinkpad = f.voice("thinkpad").with_peers(&peers).unwrap();
+    let mut v = [thinkpad, f.voice("desk"), f.voice("sentinel")];
+    for voice in &mut v {
+        voice.start(at(0), &wall(at(0))).await.unwrap();
+    }
+    // The sentinel refrains every 5 minutes, so its silence is called after 10, not 30.
+    let heard = run(&mut v, 0, 20 * MIN, 5, |i, _| i != 2, "sentinel").await;
+    let first = heard
+        .iter()
+        .find(|(_, c, _)| *c == Clock::Reachability)
+        .expect("the sentinel's silence is noticed");
+    assert_eq!(first.0, 10 * MIN, "{heard:?}");
 }

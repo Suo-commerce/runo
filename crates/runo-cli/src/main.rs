@@ -72,9 +72,13 @@ enum Cmd {
         /// Singer id, as enrolled.
         #[arg(long)]
         singer: String,
-        /// Profile path.
+        /// Profile path [default: this singer's profile in --manifest].
         #[arg(long)]
-        profile: std::path::PathBuf,
+        profile: Option<std::path::PathBuf>,
+        /// chorus.toml: judge each peer by its own profile (a sentinel refraining every 5
+        /// minutes is missed sooner than a laptop).
+        #[arg(long)]
+        manifest: Option<std::path::PathBuf>,
         /// The chorus directory holding the signed roster.
         #[arg(long)]
         chorus: std::path::PathBuf,
@@ -109,8 +113,28 @@ enum Cmd {
         #[arg(long)]
         overdue: bool,
     },
-    /// The owner's view.
-    View,
+    /// The fleet: one line per machine, what it last declared and whether its silence is
+    /// expected. Problems first. Read-only.
+    View {
+        /// Path to chorus.toml (each machine is judged by its own profile).
+        #[arg(long)]
+        manifest: std::path::PathBuf,
+        /// The chorus directory holding the signed roster.
+        #[arg(long)]
+        chorus: std::path::PathBuf,
+        /// The store: its Unix socket path, or `tcp:host:port`.
+        #[arg(long)]
+        store: String,
+        /// The owner's public key as `runo init --sign` printed it.
+        #[arg(long)]
+        owner_key: Option<String>,
+        /// Print once and exit.
+        #[arg(long)]
+        once: bool,
+        /// Seconds between refreshes.
+        #[arg(long, default_value_t = 30)]
+        every: u64,
+    },
     /// The chorus's store.
     Store {
         #[command(subcommand)]
@@ -242,10 +266,7 @@ fn store_serve(
 }
 
 fn wall_now() -> runo_core::time::Instant {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    runo_core::time::Instant(u64::try_from(nanos).unwrap_or(u64::MAX))
+    runo_core::time::wall::now()
 }
 
 /// `runo doctor`: what can be reached, what would be done, every setting. Writes nothing.
@@ -465,6 +486,65 @@ fn exit_on(r: Result<(), String>, cmd: &str, code: i32) {
     }
 }
 
+/// Tier 3 at run time: `runo node`, `runo sing`, `runo view`. Exit code 5 on refusal.
+fn chorus_run(cmd: Cmd) {
+    match cmd {
+        Cmd::Node {
+            singer,
+            profile,
+            manifest,
+            chorus,
+            store,
+            owner_key,
+            control,
+        } => {
+            let control = node::control_path(&singer, control);
+            exit_on(
+                node::node(&node::NodeArgs {
+                    singer: &singer,
+                    profile: profile.as_deref(),
+                    manifest: manifest.as_deref(),
+                    chorus: &chorus,
+                    store: &store,
+                    owner_key: owner_key.as_deref(),
+                    control,
+                }),
+                "node",
+                5,
+            );
+        }
+        Cmd::Sing {
+            event,
+            singer,
+            blocked_on,
+            control,
+        } => exit_on(
+            node::sing(&node::control_path(&singer, control), &event, blocked_on),
+            "sing",
+            5,
+        ),
+        Cmd::View {
+            manifest,
+            chorus,
+            store,
+            owner_key,
+            once,
+            every,
+        } => exit_on(
+            node::view(
+                &manifest,
+                &chorus,
+                &store,
+                owner_key.as_deref(),
+                (!once).then_some(every),
+            ),
+            "view",
+            5,
+        ),
+        _ => unreachable!("chorus_run is called for node, sing and view only"),
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
@@ -516,38 +596,7 @@ fn main() {
             chorus,
             sign,
         } => exit_on(chorus::init(&manifest, &chorus, sign), "init", 4),
-        Cmd::Node {
-            singer,
-            profile,
-            chorus,
-            store,
-            owner_key,
-            control,
-        } => {
-            let control = node::control_path(&singer, control);
-            exit_on(
-                node::node(&node::NodeArgs {
-                    singer: &singer,
-                    profile: &profile,
-                    chorus: &chorus,
-                    store: &store,
-                    owner_key: owner_key.as_deref(),
-                    control,
-                }),
-                "node",
-                5,
-            );
-        }
-        Cmd::Sing {
-            event,
-            singer,
-            blocked_on,
-            control,
-        } => exit_on(
-            node::sing(&node::control_path(&singer, control), &event, blocked_on),
-            "sing",
-            5,
-        ),
+        cmd @ (Cmd::Node { .. } | Cmd::Sing { .. } | Cmd::View { .. }) => chorus_run(cmd),
         other => println!(
             "{other:?}: not yet implemented; see the technical specification §14 for its milestone"
         ),

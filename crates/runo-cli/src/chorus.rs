@@ -35,7 +35,8 @@ pub fn enroll(singer: &str, chorus: &Path, credential: Option<&str>) -> Result<(
     Ok(())
 }
 
-fn load(
+/// `chorus.toml` and each voice's profile, keyed by the manifest's `profile` path.
+pub fn load(
     manifest: &Path,
 ) -> Result<(runo_profile::manifest::Manifest, BTreeMap<String, Profile>), String> {
     let text =

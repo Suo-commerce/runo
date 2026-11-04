@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+pub mod wall;
+
 /// A monotonic instant in nanoseconds, from a [`Clock`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Instant(pub u64);

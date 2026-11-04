@@ -1,0 +1,23 @@
+# The ThinkPad's voice in Goliath (milestone 4e): a systemd *user* unit, so it runs as you, with
+# your key home, and never as root. Install with ./install.sh, or by hand as README.md describes.
+[Unit]
+Description=Runo node: this laptop's voice in the Goliath chorus
+Documentation=https://github.com/Suo-commerce/runo/blob/main/deploy/thinkpad/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# RUNO_STORE and RUNO_OWNER_KEY come from here; the owner key is public, the file holds no secret.
+EnvironmentFile=%h/.config/runo/node.env
+ExecStart=%h/.local/bin/runo node --singer thinkpad \
+  --manifest %h/.config/runo/goliath/examples/goliath/chorus.toml --chorus %h/.config/runo/chorus \
+  --store ${RUNO_STORE} --owner-key ${RUNO_OWNER_KEY}
+# A clean stop is a goodbye: save, then go offline, so the others don't call the silence. Best
+# effort: from a state that cannot reach state-saved (docked, asleep) the stop is just silent.
+ExecStop=-%h/.local/bin/runo sing --singer thinkpad state-saved
+ExecStop=-%h/.local/bin/runo sing --singer thinkpad going-offline
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

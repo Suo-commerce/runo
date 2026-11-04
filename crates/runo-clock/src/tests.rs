@@ -131,6 +131,7 @@ fn config(reachability: bool) -> Config {
         owner: Some(s("owner")),
         domains: BTreeMap::new(),
         declared: BTreeMap::new(),
+        peers: BTreeMap::new(),
     }
 }
 
