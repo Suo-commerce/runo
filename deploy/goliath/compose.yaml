@@ -1,0 +1,53 @@
+# Goliath's emulated machines (milestone 4d): the store, `desk` and `sentinel`, each in its own
+# container, singing presence. The ThinkPad's own node runs on the laptop and joins through the
+# store's port, which is published on 127.0.0.1 only: the store service has no authentication of
+# its own (every reader admits records against the signed roster, so a forged verse is refused,
+# but anyone who can reach the port can fill the disk).
+#
+# These containers share the laptop, so they share its failure domain: a real second host (the
+# Scaleway VM) is still needed for milestone 6. Their keys live under ./state/keys on the laptop.
+#
+# Run it with ./fleet.sh, which also enrolls the voices and signs the roster.
+
+x-voice: &voice
+  image: runo:local
+  user: "${UID:-1000}:${GID:-1000}"
+  restart: unless-stopped
+  depends_on: [store]
+  environment:
+    RUNO_HOME: /keys
+
+services:
+  store:
+    image: runo:local
+    user: "${UID:-1000}:${GID:-1000}"
+    restart: unless-stopped
+    command: ["store", "serve", "--dir", "/song", "--socket", "/tmp/store.sock", "--tcp", "0.0.0.0:7070"]
+    volumes:
+      - ./state/song:/song
+    ports:
+      - "127.0.0.1:${RUNO_STORE_PORT:-7070}:7070"
+
+  desk:
+    <<: *voice
+    command: ["node", "--singer", "desk", "--manifest", "/goliath/examples/goliath/chorus.toml",
+              "--chorus", "/chorus", "--store", "tcp:store:7070",
+              "--owner-key", "${RUNO_OWNER_KEY:-}",
+              "--control", "/tmp/desk.sock"]
+    volumes:
+      - ../../examples/goliath:/goliath/examples/goliath:ro
+      - ../../profiles:/goliath/profiles:ro
+      - ./state/chorus:/chorus
+      - ./state/keys/desk:/keys
+
+  sentinel:
+    <<: *voice
+    command: ["node", "--singer", "sentinel", "--manifest", "/goliath/examples/goliath/chorus.toml",
+              "--chorus", "/chorus", "--store", "tcp:store:7070",
+              "--owner-key", "${RUNO_OWNER_KEY:-}",
+              "--control", "/tmp/sentinel.sock"]
+    volumes:
+      - ../../examples/goliath:/goliath/examples/goliath:ro
+      - ../../profiles:/goliath/profiles:ro
+      - ./state/chorus:/chorus
+      - ./state/keys/sentinel:/keys

@@ -1,0 +1,18 @@
+#!/bin/sh
+# systemd-sleep hook: tell the chorus this laptop is going to sleep, and that it woke.
+# Installed as /usr/lib/systemd/system-sleep/runo (root-owned, mode 0755). systemd runs it with
+# "pre" before suspend or hibernate and "post" after resume. It only talks to your own node's
+# control socket; it never touches keys. Set RUNO_USER if your login name differs.
+RUNO_USER=${RUNO_USER:-samwain}
+uid=$(id -u "$RUNO_USER" 2>/dev/null) || exit 0
+RUNO=${RUNO:-$(getent passwd "$RUNO_USER" | cut -d: -f6)/.local/bin/runo}
+SOCKET=${RUNO_SOCKET:-/run/user/$uid/runo/thinkpad.sock}
+[ -S "$SOCKET" ] || exit 0          # no node running: nothing to say
+
+sing() { timeout 10 "$RUNO" sing --singer thinkpad --control "$SOCKET" "$1" || true; }
+
+case "$1" in
+  pre)  sing sleep ;;
+  post) sing wake; sing online ;;
+esac
+exit 0

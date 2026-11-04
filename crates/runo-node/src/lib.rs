@@ -3,7 +3,9 @@
 
 pub mod channel;
 pub mod episodes;
+pub mod fleet;
 pub mod identity;
+pub mod listener;
 pub mod run;
 pub mod voice;
 

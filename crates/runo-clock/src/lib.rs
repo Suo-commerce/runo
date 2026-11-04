@@ -187,6 +187,19 @@ pub struct Config {
     /// machine's `sleep`: declared silence changes the expectation, it never switches the clock
     /// off (technical spec §14, milestone 4).
     pub declared: BTreeMap<String, Cadence>,
+    /// Peers judged by their own expectations (from their own profiles) instead of this voice's:
+    /// a sentinel that refrains every 5 minutes is missed sooner than a laptop that refrains
+    /// every 15. A peer not listed is judged by `reachability` and `declared` above.
+    pub peers: BTreeMap<SingerId, PeerCadence>,
+}
+
+/// One peer's own reachability expectations.
+#[derive(Clone, Debug, Default)]
+pub struct PeerCadence {
+    /// While it is in a state it refrains in.
+    pub reachability: Option<Cadence>,
+    /// While it declares a state it does not refrain in, such as `sleep`.
+    pub declared: BTreeMap<String, Cadence>,
 }
 
 /// One clock as the view shows it.
@@ -342,7 +355,7 @@ impl Chorus {
                 });
             }
             for clock in CLOCKS {
-                let Some((elapsed, cadence)) = running(p, clock, now, config) else {
+                let Some((elapsed, cadence)) = running(peer, p, clock, now, config) else {
                     continue;
                 };
                 let (target, _) = escalate::level_at(&cadence, elapsed);
@@ -379,15 +392,17 @@ impl Chorus {
                 task: task.clone(),
                 epoch: p.epoch.unwrap_or(Epoch(0)),
                 clocks: CLOCKS.map(|c| {
-                    if c == Clock::Reachability && self.config.reachability.is_none() {
+                    if c == Clock::Reachability && reach_cadence(peer, None, &self.config).is_none()
+                    {
                         return ClockState::Unknown;
                     }
-                    running(p, c, now, &self.config).map_or(ClockState::Idle, |(elapsed, _)| {
-                        ClockState::Running {
+                    running(peer, p, c, now, &self.config).map_or(
+                        ClockState::Idle,
+                        |(elapsed, _)| ClockState::Running {
                             elapsed,
                             level: p.level[idx(c)],
-                        }
-                    })
+                        },
+                    )
                 }),
                 blocked_on: p.blocked_on.clone(),
                 state: p.state.clone(),
@@ -612,8 +627,21 @@ impl Chorus {
     }
 }
 
+/// The reachability cadence for `peer` in `state`: its own expectations if configured, else
+/// this voice's.
+fn reach_cadence(peer: &SingerId, state: Option<&String>, config: &Config) -> Option<Cadence> {
+    let (reach, declared) = config
+        .peers
+        .get(peer)
+        .map_or((config.reachability, &config.declared), |own| {
+            (own.reachability, &own.declared)
+        });
+    state.and_then(|s| declared.get(s)).copied().or(reach)
+}
+
 /// Elapsed time and cadence for a clock that is running, or `None`.
 fn running(
+    peer: &SingerId,
     p: &PeerClocks,
     clock: Clock,
     now: Instant,
@@ -621,12 +649,7 @@ fn running(
 ) -> Option<(Millis, Cadence)> {
     match clock {
         Clock::Reachability => {
-            let cadence = p
-                .state
-                .as_ref()
-                .and_then(|s| config.declared.get(s))
-                .copied()
-                .or(config.reachability)?;
+            let cadence = reach_cadence(peer, p.state.as_ref(), config)?;
             p.task.as_ref()?;
             Some((ms(now.0.saturating_sub(p.reach_since?.0)), cadence))
         }

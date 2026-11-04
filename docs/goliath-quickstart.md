@@ -40,6 +40,19 @@ runo sing --singer desk wake
 runo sing --singer desk docked     # refused: the profile allows docked only from online
 ```
 
+## 4. Look at the fleet
+
+```sh
+runo view --manifest examples/goliath/chorus.toml --chorus $G/chorus --store $G/store/store.sock --owner-key $OWNER
+```
+
+One line per machine, problems first: `QUIET` (silent past its expectation), never heard,
+waiting, up, asleep as it said, offline as it said. Refused records are counted under
+`incidents`. `--once` prints it once.
+
+For the Docker fleet (desk and sentinel in containers) and the ThinkPad as a systemd service, see
+`deploy/goliath/README.md` and `deploy/thinkpad/README.md`.
+
 ## What you should see
 
 - Stop the desk node with Ctrl-C without singing anything. About 30 minutes later (twice the
