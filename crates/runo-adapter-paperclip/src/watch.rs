@@ -23,7 +23,7 @@ use runo_core::time::Instant;
 use runo_core::{Clock, Timestamp, VerseId};
 use runo_node::episodes::{Episode, EpisodeError, Episodes, Notice};
 
-use crate::board::{Agent, Issue, Run};
+use crate::board::{Agent, BLOCKER, Issue, Run, blocker_of};
 use crate::herald::{FAILED_RUN, Herald, HeraldConfig, Signal};
 use crate::poll::{Feed, Gap, List};
 use crate::time;
@@ -32,9 +32,74 @@ use crate::time;
 /// view and the measures, small enough for a nearly full disk (HODD Bob was at 95% on 3 Nov).
 pub const KEEP_RESOLVED: usize = 500;
 
-/// Open episodes the view lists before folding the rest into a count: the view fits one screen
+/// Rows the view lists before folding the rest into a count: the view fits one screen
 /// (technical spec §15).
 pub const VIEW_ROWS: usize = 25;
+
+/// One row of the view: a lane, or the lanes one blocker holds.
+enum Row<'a> {
+    One(&'a Episode),
+    Blocks(&'a str, Vec<&'a Episode>),
+}
+
+impl<'a> Row<'a> {
+    fn lanes(&self) -> Vec<&'a Episode> {
+        match self {
+            Row::One(e) => vec![e],
+            Row::Blocks(_, lanes) => lanes.clone(),
+        }
+    }
+}
+
+/// The view's rows, by usefulness: failed runs; then waits grouped by the issue that blocks them,
+/// the blocker holding the most lanes first (unblock it and they all move); then every other lane,
+/// worst level and longest overdue first.
+fn rows<'a>(open: &[&'a Episode]) -> Vec<Row<'a>> {
+    let by_age = |a: &&Episode, b: &&Episode| {
+        b.level
+            .cmp(&a.level)
+            .then(a.opened_at.0.cmp(&b.opened_at.0))
+    };
+    let mut failed: Vec<&Episode> = open
+        .iter()
+        .copied()
+        .filter(|e| e.reason.starts_with(FAILED_RUN))
+        .collect();
+    failed.sort_by(by_age);
+    let mut groups: BTreeMap<&str, Vec<&Episode>> = BTreeMap::new();
+    let mut singles = Vec::new();
+    for e in open
+        .iter()
+        .copied()
+        .filter(|e| !e.reason.starts_with(FAILED_RUN))
+    {
+        match blocker_of(&e.reason).filter(|_| e.id.clock == Clock::Waiting) {
+            Some(b) => groups.entry(b).or_default().push(e),
+            None => singles.push(e),
+        }
+    }
+    let mut blocks = Vec::new();
+    for (b, mut lanes) in groups {
+        if lanes.len() == 1 {
+            singles.extend(lanes);
+        } else {
+            lanes.sort_by(|a, b| a.opened_at.0.cmp(&b.opened_at.0));
+            blocks.push((b, lanes));
+        }
+    }
+    blocks.sort_by(|(_, a), (_, b)| {
+        b.len()
+            .cmp(&a.len())
+            .then(a[0].opened_at.0.cmp(&b[0].opened_at.0))
+    });
+    singles.sort_by(by_age);
+    failed
+        .into_iter()
+        .map(Row::One)
+        .chain(blocks.into_iter().map(|(b, l)| Row::Blocks(b, l)))
+        .chain(singles.into_iter().map(Row::One))
+        .collect()
+}
 
 /// A message owed to a person.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -212,6 +277,45 @@ impl Watch {
         }
     }
 
+    /// One row of the view.
+    fn row_line(&self, row: &Row<'_>, now: Instant) -> String {
+        let age = |e: &Episode| {
+            time::parse(&e.opened_at.0).map_or(String::new(), |t| span(now.0.saturating_sub(t.0)))
+        };
+        match row {
+            Row::One(e) => format!(
+                "  {:<14} {:<12} {:<10} {:<16} {:<9} {}",
+                level_word(e.level),
+                clock_word(e.id.clock),
+                e.id.lane.task.0,
+                self.agent(&e.id.lane.singer.0),
+                age(e),
+                e.reason
+            ),
+            Row::Blocks(blocker, lanes) => {
+                let worst = lanes.iter().map(|e| e.level).max().unwrap_or(Level::Quiet);
+                let oldest = lanes.first().map(|e| age(e)).unwrap_or_default();
+                let mut names: Vec<&str> =
+                    lanes.iter().map(|e| e.id.lane.task.0.as_str()).collect();
+                let more = names.len().saturating_sub(6);
+                names.truncate(6);
+                let more = if more > 0 {
+                    format!(" +{more}")
+                } else {
+                    String::new()
+                };
+                let why = lanes[0].reason.split(BLOCKER).next().unwrap_or_default();
+                format!(
+                    "  {:<14} {:<12} {blocker} holds {} lanes ({}{more}), oldest {oldest}: {why}",
+                    level_word(worst),
+                    "waiting",
+                    lanes.len(),
+                    names.join(" ")
+                )
+            }
+        }
+    }
+
     /// The triage view at `now`, one screen: open episodes worst first, then what was settled
     /// as history, any gaps, and the one honest limitation of Watch mode.
     #[must_use]
@@ -223,43 +327,35 @@ impl Watch {
             v,
             "{lanes} lanes in progress · reachability unknown (the board does not say whether a worker responds)"
         );
-        let mut open: Vec<&Episode> = self.episodes.open().collect();
-        open.sort_by(|a, b| {
-            let fail = |e: &Episode| e.reason.starts_with(FAILED_RUN);
-            fail(b)
-                .cmp(&fail(a))
-                .then(b.level.cmp(&a.level))
-                .then(a.opened_at.0.cmp(&b.opened_at.0))
-        });
+        let open: Vec<&Episode> = self.episodes.open().collect();
+        let rows = rows(&open);
         let _ = writeln!(
             v,
-            "\nOpen ({}), worst first, with how long each has been overdue:",
+            "\nOpen lanes: {}, worst first; waits are grouped by the issue that blocks them, with how long each has been overdue:",
             open.len()
         );
         if open.is_empty() {
             let _ = writeln!(v, "  nothing overdue");
         }
-        for e in open.iter().take(VIEW_ROWS) {
-            let age = time::parse(&e.opened_at.0)
-                .map_or(String::new(), |t| span(now.0.saturating_sub(t.0)));
-            let _ = writeln!(
-                v,
-                "  {:<12} {:<12} {:<10} {:<16} {:<9} {}",
-                level_word(e.level),
-                clock_word(e.id.clock),
-                e.id.lane.task.0,
-                self.agent(&e.id.lane.singer.0),
-                age,
-                e.reason
-            );
+        for row in rows.iter().take(VIEW_ROWS) {
+            let _ = writeln!(v, "{}", self.row_line(row, now));
         }
-        if let Some(rest) = open.get(VIEW_ROWS..).filter(|r| !r.is_empty()) {
+        if let Some(rest) = rows.get(VIEW_ROWS..).filter(|r| !r.is_empty()) {
             let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
-            for e in rest {
-                *kinds.entry(clock_word(e.id.clock)).or_default() += 1;
+            let mut lanes = 0;
+            for row in rest {
+                for e in row.lanes() {
+                    *kinds.entry(clock_word(e.id.clock)).or_default() += 1;
+                    lanes += 1;
+                }
             }
             let kinds: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
-            let _ = writeln!(v, "  … and {} more: {}", rest.len(), kinds.join(", "));
+            let _ = writeln!(
+                v,
+                "  … and {lanes} more lanes in {} rows: {}",
+                rest.len(),
+                kinds.join(", ")
+            );
         }
         let resolved = self.episodes.all().iter().filter(|e| !e.is_open()).count();
         let _ = writeln!(

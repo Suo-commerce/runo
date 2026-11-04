@@ -35,7 +35,11 @@ use crate::board::{Block, BoardEvent};
 const MINUTE: u64 = 60_000;
 
 /// Paperclip's non-retryable failure kinds, as of `f7ad1dc`.
-pub const NEVER_CLEARS: [&str; 21] = [
+///
+/// Except one: `issue_dependencies_blocked`. Paperclip does not retry it because it waits on
+/// purpose ("Paperclip will wake the assignee when blockers resolve"), so it is a wait, already
+/// covered by the blocked issue's own lane, not a failure that needs a person (HODD Bob, 4 Nov).
+pub const NEVER_CLEARS: [&str; 20] = [
     "project_access_denied",
     "native_provider_model_rejected",
     "provider_tool_definition_invalid",
@@ -45,7 +49,6 @@ pub const NEVER_CLEARS: [&str; 21] = [
     "budget_blocked",
     "budget_exhausted",
     "issue_paused",
-    "issue_dependencies_blocked",
     "setup_failed",
     "workspace_git_scan_timeout",
     "workspace_git_scan_saturated",
@@ -255,7 +258,7 @@ impl Herald {
                     });
                     let lane = lane.unwrap_or_else(|| Lane {
                         singer: SingerId(agent.clone()),
-                        task: TaskId(name.unwrap_or_else(|| "no issue".into())),
+                        task: TaskId(name.unwrap_or_else(|| "(no issue)".into())),
                     });
                     if let Some(i) = issue {
                         self.issues.entry(i.clone()).or_default().failed = Some(lane.clone());
@@ -269,7 +272,8 @@ impl Herald {
                         level: Level::Suspected,
                         overdue_by: Millis(0),
                         reason: format!(
-                            "{FAILED_RUN}{id}: {code}, which Paperclip does not retry{why}"
+                            "{FAILED_RUN}{}: {code}, which Paperclip does not retry{why}",
+                            short(id)
                         ),
                         since: *at,
                         at: *at,
@@ -423,6 +427,11 @@ impl Herald {
                 }),
         );
     }
+}
+
+/// A board id shortened for a person: its first eight characters.
+fn short(id: &str) -> String {
+    id.chars().take(8).collect()
 }
 
 /// The first line of a reason, at most 120 characters.

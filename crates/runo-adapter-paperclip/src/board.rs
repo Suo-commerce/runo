@@ -56,6 +56,17 @@ pub struct UnblockDescriptor {
     pub action: Option<String>,
 }
 
+/// How a wait's reason names its blocker: `… (blocker HOD-1129)`.
+pub const BLOCKER: &str = " (blocker ";
+
+/// The blocker a wait's reason names, if any.
+#[must_use]
+pub fn blocker_of(reason: &str) -> Option<&str> {
+    let start = reason.find(BLOCKER)? + BLOCKER.len();
+    let len = reason[start..].find(')')?;
+    Some(&reason[start..start + len])
+}
+
 /// What a blocked issue waits on, as the board explains it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Block {
@@ -250,7 +261,7 @@ impl Issue {
                 .as_deref()
                 .or(a.sample_blocker_identifier.as_deref())
         }) {
-            on = format!("{on} (blocker {blocker})");
+            on = format!("{on}{BLOCKER}{blocker})");
         }
         Block::Waits {
             on,
