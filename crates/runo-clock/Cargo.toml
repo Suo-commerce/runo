@@ -14,6 +14,7 @@
     runo-core = { workspace = true }
 runo-cadence = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 
 
     [dev-dependencies]
