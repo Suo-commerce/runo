@@ -11,6 +11,7 @@ they change (the revision each export came from is noted beside it).
 | `replay-report.md` | Runo Replay Report: HODD Bob, 27–31 October 2026 | rev 7, 3 Nov 2026 |
 | `post-mortem-mapping.md` | Runo Against the HODD Bob Post-Mortem | rev 8, 3 Nov 2026 |
 | `paperclip-api-check.md` | The check decision 8 asks for: which Paperclip routes carry the herald's signals, how they page, the live-events socket | Written in the repo, 3 Nov 2026 |
+| `watch-quickstart.md` | Running `runo watch` on a Paperclip board: doctor, one look, keep watching, what the view means | Written in the repo, 4 Nov 2026 |
 | `technical-decisions-2026-11-03.md` | Runo Core Technical Decisions: the ten choices that reconciled the technical specification's inconsistencies | Word document, 3 Nov 2026 |
 
 Embedded drawings do not survive the export; the §2 crate graph in `tech-spec.md` is redrawn as a

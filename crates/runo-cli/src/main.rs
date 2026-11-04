@@ -21,17 +21,25 @@ enum Cmd {
         #[arg(long)]
         forge: Option<String>,
     },
-    /// Tier 2: the triage view and call ladder, as a chorus of one.
+    /// Tier 2: the triage view and call ladder, as a chorus of one. Read-only on the board.
     Watch {
-        /// Paperclip database URL.
+        #[command(flatten)]
+        board: Board,
+        /// Where messages go. Only `terminal` for now; comments on the issue come behind --apply.
+        #[arg(long, default_value = "terminal")]
+        notify: String,
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 60)]
+        interval: u64,
+        /// Poll once, print the view, and exit.
         #[arg(long)]
-        paperclip: String,
-        /// Where to deliver, e.g. `telegram:<chat>`.
-        #[arg(long)]
-        notify: Option<String>,
+        once: bool,
     },
-    /// What runo can reach and what it would do; every default printed.
-    Doctor,
+    /// What runo can reach and what it would do; every default printed. Writes nothing.
+    Doctor {
+        #[command(flatten)]
+        board: Board,
+    },
     /// Tier 3: write the genesis roster from a chorus manifest.
     Init {
         /// Path to chorus.toml.
@@ -68,6 +76,55 @@ enum Cmd {
         #[command(subcommand)]
         cmd: StoreCmd,
     },
+}
+
+/// Which board to read, and with what key.
+#[derive(clap::Args, Debug)]
+struct Board {
+    /// The Paperclip board's address, such as `https://board.example`.
+    #[arg(long)]
+    paperclip: String,
+    /// The company id on that board.
+    #[arg(long)]
+    company: String,
+    /// The environment variable holding the API key (never the key itself).
+    #[arg(long, default_value = "PAPERCLIP_API_KEY")]
+    token_env: String,
+    /// Rows per page; the board serves at most 1000.
+    #[arg(long, default_value_t = 1000)]
+    page: usize,
+    /// Where the episode ledger lives [default: `$XDG_STATE_HOME/runo/watch`, else
+    /// `~/.local/state/runo/watch`].
+    #[arg(long)]
+    state: Option<std::path::PathBuf>,
+}
+
+impl Board {
+    fn state_dir(&self) -> std::path::PathBuf {
+        self.state.clone().unwrap_or_else(|| {
+            let base = std::env::var_os("XDG_STATE_HOME").map_or_else(
+                || {
+                    std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                        .join(".local/state")
+                },
+                std::path::PathBuf::from,
+            );
+            base.join("runo/watch")
+        })
+    }
+
+    fn client(&self) -> Result<runo_adapter_paperclip::poll::Paperclip, String> {
+        let token = std::env::var(&self.token_env)
+            .ok()
+            .filter(|t| !t.is_empty());
+        runo_adapter_paperclip::poll::Paperclip::new(
+            &self.paperclip,
+            &self.company,
+            token,
+            self.page,
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -135,14 +192,177 @@ fn store_serve(
     })
 }
 
+fn wall_now() -> runo_core::time::Instant {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    runo_core::time::Instant(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+/// `runo doctor`: what can be reached, what would be done, every setting. Writes nothing.
+fn doctor(board: &Board) -> Result<(), String> {
+    use runo_adapter_paperclip::herald::HeraldConfig;
+    let cfg = HeraldConfig::default();
+    let minutes = |m: runo_core::Millis| m.0 / 60_000;
+    println!("runo doctor · read-only: nothing is written to the board\n");
+    println!("board          {}", board.paperclip);
+    println!("company        {}", board.company);
+    let has_key = std::env::var(&board.token_env).is_ok_and(|t| !t.is_empty());
+    println!(
+        "api key        ${} is {}",
+        board.token_env,
+        if has_key { "set" } else { "NOT set" }
+    );
+    println!(
+        "page size      {}",
+        board.page.clamp(1, runo_adapter_paperclip::poll::MAX_PAGE)
+    );
+    println!(
+        "state          {}",
+        board.state_dir().join("episodes.json").display()
+    );
+    println!(
+        "lane promise   overdue at {}m, still overdue at {}m, needs a person at {}m, after one more {}m of grace ({})",
+        minutes(cfg.promise.cadence.call),
+        minutes(cfg.promise.cadence.again),
+        minutes(cfg.promise.cadence.suspect),
+        minutes(cfg.promise.cadence.call),
+        cfg.promise.source
+    );
+    println!(
+        "waiting        the same ladder from {}m",
+        minutes(cfg.waiting.call)
+    );
+    println!(
+        "never clears   {} Paperclip error codes it does not retry: said at once",
+        cfg.never_clears.len()
+    );
+    println!(
+        "reachability   unknown in Watch mode: the board does not say whether a worker responds"
+    );
+    println!("delivery       terminal; history before the first start is kept, not sent\n");
+
+    let client = board.client()?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        match client.version().await {
+            Ok(v) => println!("reach          ok, Paperclip {}", v.as_deref().unwrap_or("(version not given)")),
+            Err(e) => return Err(format!("cannot reach the board: {e}")),
+        }
+        let agents = client.agents().await.map_err(|e| format!("agents: {e}"))?;
+        let issues = client.issues().await.map_err(|e| format!("issues: {e}"))?;
+        let runs = client.runs().await.map_err(|e| format!("runs: {e}"))?;
+        let active = issues
+            .iter()
+            .filter(|i| matches!(i.status.as_str(), "in_progress" | "blocked" | "in_review"))
+            .count();
+        println!(
+            "read           {} agents, {} issues ({active} in progress, blocked or in review), {} runs",
+            agents.len(),
+            issues.len(),
+            runs.len()
+        );
+        if issues.len() >= client.page() || runs.len() >= client.page() {
+            println!("note           a list filled a whole page: the first start sees only the newest {}", client.page());
+        }
+        Ok(())
+    })
+}
+
+/// `runo watch`: poll, step, deliver, repeat.
+fn watch(board: &Board, notify: &str, interval: u64, once: bool) -> Result<(), String> {
+    use runo_adapter_paperclip::herald::HeraldConfig;
+    use runo_adapter_paperclip::poll::PollError;
+    use runo_adapter_paperclip::watch::Watch;
+    use runo_node::channel::human::{HumanChannel, Terminal};
+
+    if notify != "terminal" {
+        return Err(format!(
+            "--notify {notify}: only `terminal` is available so far"
+        ));
+    }
+    let client = board.client()?;
+    let dir = board.state_dir();
+    let mut w =
+        Watch::open(HeraldConfig::default(), &dir, &board.paperclip).map_err(|e| e.to_string())?;
+    let channel = Terminal::new(std::io::stdout());
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        match client.agents().await {
+            Ok(a) => w.set_agents(&a),
+            Err(e) => eprintln!("runo watch: no agent names ({e}); showing ids"),
+        }
+        let mut wait = interval.max(5);
+        let mut last_open = None;
+        loop {
+            let read = async { Ok::<_, PollError>((client.issues().await?, client.runs().await?)) };
+            match read.await {
+                Ok((issues, runs)) => {
+                    wait = interval.max(5);
+                    let now = wall_now();
+                    let out = w
+                        .step(&issues, &runs, client.page(), now)
+                        .map_err(|e| e.to_string())?;
+                    for o in &out {
+                        channel
+                            .deliver(&o.notice, &o.text)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        w.delivered(&o.notice).map_err(|e| e.to_string())?;
+                    }
+                    let view = w.view(now);
+                    let open = view
+                        .lines()
+                        .skip_while(|l| !l.starts_with("Open"))
+                        .take_while(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if once || last_open.as_ref() != Some(&open) || !out.is_empty() {
+                        println!("\n{view}");
+                        last_open = Some(open);
+                    }
+                }
+                Err(PollError::Throttled(code)) => {
+                    wait = (wait * 2).min(600);
+                    eprintln!(
+                        "runo watch: the board asked to back off ({code}); next poll in {wait}s"
+                    );
+                }
+                Err(e) => eprintln!("runo watch: {e}; next poll in {wait}s"),
+            }
+            if once {
+                return Ok(());
+            }
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_secs(wait)) => {}
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            }
+        }
+    })
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Diagnose { .. } => {
             println!("runo diagnose: until milestone 3, run runo-replay/replay.py");
         }
-        Cmd::Doctor => {
-            println!("runo doctor: nothing configured yet; every default will be printed here");
+        Cmd::Doctor { board } => {
+            if let Err(e) = doctor(&board) {
+                eprintln!("runo doctor: {e}");
+                std::process::exit(2);
+            }
+        }
+        Cmd::Watch {
+            board,
+            notify,
+            interval,
+            once,
+        } => {
+            if let Err(e) = watch(&board, &notify, interval, once) {
+                eprintln!("runo watch: {e}");
+                std::process::exit(2);
+            }
         }
         Cmd::Store {
             cmd:

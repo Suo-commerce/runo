@@ -24,7 +24,7 @@ use runo_core::{Clock, Timestamp, VerseId};
 use runo_node::episodes::{Episode, EpisodeError, Episodes, Notice};
 
 use crate::board::{Agent, Issue, Run};
-use crate::herald::{Herald, HeraldConfig, Signal};
+use crate::herald::{FAILED_RUN, Herald, HeraldConfig, Signal};
 use crate::poll::{Feed, Gap, List};
 use crate::time;
 
@@ -140,11 +140,15 @@ impl Watch {
                     reason,
                     since,
                     at,
-                    ..
+                    overdue_by,
                 } => {
                     let id = format!("{}\n{}\n{clock:?}\n{}", lane.singer.0, lane.task.0, since.0);
                     let opening = VerseId(runo_core::hash::digest(id.as_bytes()));
-                    let at = Timestamp(time::format(at));
+                    // When it became overdue: deterministic on replay, and what the
+                    // within-the-hour measure counts from.
+                    let crossed =
+                        Instant(at.0.saturating_sub(overdue_by.0.saturating_mul(1_000_000)));
+                    let at = Timestamp(time::format(crossed));
                     self.episodes
                         .escalated(&lane, clock, level, opening, &at, &reason);
                 }
@@ -196,20 +200,23 @@ impl Watch {
         );
         let mut open: Vec<&Episode> = self.episodes.open().collect();
         open.sort_by(|a, b| {
-            let fail = |e: &Episode| e.id.clock == Clock::Task && e.level == Level::Suspected;
+            let fail = |e: &Episode| e.reason.starts_with(FAILED_RUN);
             fail(b)
                 .cmp(&fail(a))
                 .then(b.level.cmp(&a.level))
                 .then(a.opened_at.0.cmp(&b.opened_at.0))
         });
-        let _ = writeln!(v, "\nOpen ({}):", open.len());
+        let _ = writeln!(
+            v,
+            "\nOpen ({}), worst first, with how long each has been overdue:",
+            open.len()
+        );
         if open.is_empty() {
             let _ = writeln!(v, "  nothing overdue");
         }
         for e in &open {
-            let age = time::parse(&e.opened_at.0).map_or(String::new(), |t| {
-                format!("for {}", span(now.0.saturating_sub(t.0)))
-            });
+            let age = time::parse(&e.opened_at.0)
+                .map_or(String::new(), |t| span(now.0.saturating_sub(t.0)));
             let _ = writeln!(
                 v,
                 "  {:<12} {:<12} {:<10} {:<16} {:<9} {}",

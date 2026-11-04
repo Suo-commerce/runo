@@ -74,7 +74,7 @@ fn a_first_start_sends_what_is_stuck_now_and_keeps_history_quiet() {
         "HOD-2 · Bob · waiting needs a person: blocked on the board for longer than the waiting threshold\n  https://bob.example/issues/HOD-2"
     );
     let view = w.view(at(300));
-    assert!(view.contains("Open (1):"), "{view}");
+    assert!(view.contains("Open (1), worst first"), "{view}");
     assert!(
         view.contains("Resolved: 1 (1 before the herald started"),
         "{view}"
@@ -164,8 +164,10 @@ fn a_stall_getting_worse_is_one_more_message_and_a_failure_comes_first() {
     let texts: Vec<&str> = out.iter().map(|o| o.text.as_str()).collect();
     assert_eq!(out.len(), 2, "{texts:?}");
     assert!(
-        texts.iter().any(|t| t
-            .starts_with("HOD-1 · Bob · task needs a person: run r9 failed with budget_exhausted")),
+        texts
+            .iter()
+            .any(|t| t
+                .starts_with("HOD-1 · Bob · task needs a person: failed run r9: budget_exhausted")),
         "{texts:?}"
     );
     assert!(

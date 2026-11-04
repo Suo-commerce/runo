@@ -58,6 +58,9 @@ pub const NEVER_CLEARS: [&str; 21] = [
     "low_trust_runtime_services_denied",
 ];
 
+/// How every failed-run reason begins, so the view can put failures that need a person first.
+pub const FAILED_RUN: &str = "failed run ";
+
 /// How the herald judges a board.
 #[derive(Clone, Debug)]
 pub struct HeraldConfig {
@@ -241,7 +244,7 @@ impl Herald {
                         level: Level::Suspected,
                         overdue_by: Millis(0),
                         reason: format!(
-                            "run {id} failed with {code}, which Paperclip does not retry{why}"
+                            "{FAILED_RUN}{id}: {code}, which Paperclip does not retry{why}"
                         ),
                         since: *at,
                         at: *at,
