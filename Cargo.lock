@@ -676,8 +676,11 @@ name = "runo-adapter-paperclip"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "runo-clock",
  "runo-core",
  "runo-node",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

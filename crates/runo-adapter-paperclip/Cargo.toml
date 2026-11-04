@@ -13,6 +13,9 @@
     [dependencies]
     runo-core = { workspace = true }
 runo-node = { workspace = true }
+runo-clock = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 
