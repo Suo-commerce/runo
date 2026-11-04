@@ -110,7 +110,7 @@ The human `CallChannel` delivers one message per episode and level: a comment on
 
 Later crates (`runo-store-taso`, `runo-cadence-aegloss`, and the allocator side of `runo-adapter-paperclip`) implement Core traits and sit beside the workspace or in it behind feature flags; nothing in Core imports them. `runo-testkit` is a dev-dependency only and never ships in a binary.
 
-**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest` (rustls with the system's root certificates, so the binary stays static and trusts what its host trusts), because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8), and `serde_json` to read the board's JSON, tolerating fields it does not use. `runo-store` adds `serde_json` for the jsonl backend's human-readable lines (§7), so a song can be read with `grep` and the replay kit. `runo-node` uses the same `serde_json` for its episode state, so what was delivered to a person survives a restart and can be read by hand. `runo-node` also takes `reqwest` (the same rustls build) for its Telegram channel, the first human channel that reaches a phone; the bot token is read from an environment variable the operator names and never logged. The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
+**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest` (rustls with the system's root certificates, so the binary stays static and trusts what its host trusts), because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8), and `serde_json` to read the board's JSON, tolerating fields it does not use. `runo-store` adds `serde_json` for the jsonl backend's human-readable lines (§7), so a song can be read with `grep` and the replay kit. `runo-node` uses the same `serde_json` for its episode state, so what was delivered to a person survives a restart and can be read by hand. `runo-fence` uses `serde_json` for the allocator's journal, one event per line, for the same reason as the store. `runo-node` also takes `reqwest` (the same rustls build) for its Telegram channel, the first human channel that reaches a phone; the bot token is read from an environment variable the operator names and never logged. The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
 
 ## 3. Data model
 
@@ -154,7 +154,8 @@ pub enum Payload {
     Ruling     { about: About, verdict: Verdict, reason: Option<String> },
     // record: allocator only
     Grant      { holder: SingerId, task: TaskId, epoch: Epoch, resources: Vec<ResourceId> },
-    Activation { grant: VerseId, acks: Vec<ResourceAck> },   // ResourceAck { resource, epoch, durable: bool }: the wire form of a FenceAck (§8)
+    Activation { grant: VerseId, acks: Vec<FenceAck> },    // each ack exactly as the resource gave it (§8; decided 4 Nov 2026)
+    Closing    { task: TaskId },                           // closure starts; authorizes Fence::Closed (§8; decided 4 Nov 2026)
     Close      { task: TaskId, snapshot: Ref },            // ClosureSnapshot blob (§9)
     Tome       { close: VerseId, manifest: Ref, root: Hash },
     Addendum   { tome: VerseId, verse: VerseId },
@@ -468,7 +469,7 @@ pub enum Durability { Process, Host, Replicated(u8) }
 pub enum Fence { Epoch(Epoch), Closed }          // Closed is above every epoch: nothing writes after it
 pub struct FenceAck {                             // explicit: never supplied from the caller's context
     pub resource: ResourceId,                     // which resource persisted it
-    pub grant: VerseId,                           // the Grant it answers; the Close verse for Fence::Closed
+    pub grant: VerseId,                           // the Grant it answers; the Closing verse for Fence::Closed
     pub fence: Fence,                             // the fence now enforced
     pub durability: Durability,                   // reached before this ack
 }
@@ -500,7 +501,7 @@ pub enum Outcome { Activated { grant: VerseId, activation: VerseId }, NotActivat
 #[async_trait] pub trait FencedResource: Send + Sync {
     fn id(&self) -> ResourceId;
     /// Persist (singer, task) -> max(fence, existing) with the authorizing verse's id; never lowers.
-    /// grant is the Grant for an epoch fence, the Close verse for Fence::Closed.
+    /// grant is the Grant for an epoch fence, the Closing verse for Fence::Closed.
     async fn install(&self, singer: &SingerId, task: &TaskId, fence: Fence, grant: VerseId) -> Result<FenceAck, FenceError>;
 }
 /// The song store as a fenced resource (decision 3): the one adapter between FencedResource::install
@@ -531,11 +532,13 @@ impl FenceGuard {
 
 **Task lifecycle.** The allocator keeps a durable state per task: `Open → Closing → Closed`. Relaunch is serialized per `(singer, task)`, but closure spans every singer on the task, so the two are serialized against each other at task scope, and the closure snapshot is captured once and reused on every retry — a fixed grant set does not imply fixed chain heads, because delayed records keep entering the archive.
 
-1. `close` writes `Closing` to the allocator's `AllocatorJournal`. From that moment no new reservation or activation for any singer on that task is accepted.
+1. `close` writes `Closing` to the allocator's `AllocatorJournal`, then sings `Closing { task }` and records that verse's id in the journal. From that moment no new reservation or activation for any singer on that task is accepted. The `Closing` verse is what authorizes `Fence::Closed` at every resource (decided 4 Nov 2026: the `Close` verse cannot, because it names a snapshot taken only after the fences are closed).
 2. **Settle reservations.** Every reservation in flight either becomes a grant (its `Grant` verse is appended) or is durably marked abandoned in the `AllocatorJournal` after a bounded wait (the profile's `reservation_timeout`, 60 s by default). Only then is the grant set frozen and written to the log.
-3. **Close resources.** Install `Fence::Closed` at every resource named by any grant in the frozen set; each persists and acknowledges.
+3. **Close resources.** Install `Fence::Closed`, authorized by the `Closing` verse, at the song store and every resource named by any grant in the frozen set; each persists and acknowledges.
 4. **Capture the snapshot once.** At a defined store boundary — the store cursor at the moment every `Closed` ack is in — read the chain heads and the fork index for the frozen grants, build the `ClosureSnapshot`, store it as a blob, and **persist its hash in the closure record of the `AllocatorJournal`** before anything else.
-5. Sing `Close { task, snapshot }` naming that hash, and write `Closed`.
+5. Sing `Close { task, snapshot }` naming that hash (it lands through `record`, as control), and write `Closed`.
+
+**What the snapshot holds.** Every grant in the frozen set; one `ChainEnd` per chain with current records on the task (the allocator's own chain and unfenced epoch-0 chains included, so the tome covers the authority trail and work that never needed a relaunch), plus every granted chain with no verses as an empty end; and every fork among current records.
 
 **Crash recovery.** On restart the allocator resumes from the recorded step. If the snapshot hash is already in the closure record, steps 4–5 reuse that exact blob; the snapshot is never recomputed, even if a late fork has since entered the archive. If it is not, the allocator is before step 4 and proceeds from the frozen grant set. The crash test for this is `close-crash`: crash between snapshot persistence and `Close`, with a late archived fork arriving before restart; the published snapshot must equal the persisted one.
 
@@ -679,8 +682,8 @@ network  = "lan"
 | `runo listen [--voice X] [--overdue]` | Agent playbooks, humans | Latest verse and refrain per voice, four clocks, suspicion, incidents; `--overdue` prints only crossings. v0.1's `listen.py`, made real | Planned, milestone 4 |
 | `runo view` | Owner | The owner's view: one row per voice, four clocks, waits, gray-work signals, incidents, tempo bar; refreshes on the probe interval | Planned, milestone 3 |
 | `runo verify --tome <hash>` | Anyone | Recomputes a tome from its snapshot and reports the first mismatch | Planned, milestone 5 |
-| `runo fence relaunch --singer lane-1 --task HOD-42` | The allocator's host only | The relaunch sequence (§8); refuses without the allocator key | Planned, milestone 5 |
-| `runo fence close --task HOD-42` | The allocator's host only | Closure (§8) | Planned, milestone 5 |
+| `runo fence relaunch --singer lane-1 --task HOD-42` | The allocator's host only | The relaunch sequence (§8); refuses without the allocator key | Implemented |
+| `runo fence close --task HOD-42` | The allocator's host only | Closure (§8); resumes from its journal when run again | Implemented |
 | `runo replay --paperclip dir --forgejo dir` | Anyone | The Python replay, ported, so the detectors under test are the shipped ones | Planned, milestone 4 |
 
 No command is implemented yet; the milestone in the Status column is where each one lands (§14). `diagnose`, `watch` and `doctor` are the three-tier commands of §15; until `diagnose` exists, the Python kit in `runo-replay/` is tier 1.

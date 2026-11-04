@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::fence::{Durability, Fence};
 use crate::sign;
 use crate::types::{
     ChainKey, Epoch, PROTOCOL_VERSION, Payload, RosterDoc, RosterVersion, SingerId, TaskId, Verse,
@@ -168,6 +169,7 @@ pub fn admit(verse: &Verse, rosters: &dyn RosterHistory, view: &dyn IngressView)
         verse.payload,
         Payload::Grant { .. }
             | Payload::Activation { .. }
+            | Payload::Closing { .. }
             | Payload::Close { .. }
             | Payload::Tome { .. }
             | Payload::Addendum { .. }
@@ -273,8 +275,12 @@ fn activation_ok(verse: &Verse, roster: &RosterDoc, view: &dyn IngressView) -> b
         } => {
             g.header.singer == roster.allocator
                 && resources.iter().all(|r| {
-                    acks.iter()
-                        .any(|a| &a.resource == r && a.epoch == *epoch && a.durable)
+                    acks.iter().any(|a| {
+                        &a.resource == r
+                            && a.grant == *grant
+                            && a.fence == Fence::Epoch(*epoch)
+                            && a.durability >= Durability::Host
+                    })
                 })
         }
         _ => false,

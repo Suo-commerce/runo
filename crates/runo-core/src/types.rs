@@ -169,18 +169,6 @@ pub enum Verdict {
     Deny,
 }
 
-/// A resource's acknowledgement that a fence is installed and durable.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceAck {
-    /// Which resource.
-    pub resource: ResourceId,
-    /// The epoch it now enforces.
-    pub epoch: Epoch,
-    /// Durable at `Host` or better before this ack.
-    pub durable: bool,
-}
-
 /// The header every verse carries.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -288,8 +276,17 @@ pub enum Payload {
     Activation {
         /// The grant activated.
         grant: VerseId,
-        /// The acks, covering every listed resource.
-        acks: Vec<ResourceAck>,
+        /// The acks, covering every listed resource, each exactly as the resource gave it: the
+        /// grant it answers, the fence it enforces, the durability it reached (decided
+        /// 4 Nov 2026: the wire carries the same `FenceAck` the code does).
+        acks: Vec<crate::fence::FenceAck>,
+    },
+    /// The allocator starts closing a task (decided 4 Nov 2026): from this verse no new
+    /// reservation or activation is accepted for the task, and it is the verse that authorizes
+    /// `Fence::Closed` at every resource. `Close` follows once the snapshot is persisted.
+    Closing {
+        /// The task closing.
+        task: TaskId,
     },
     /// The allocator closes a task.
     Close {

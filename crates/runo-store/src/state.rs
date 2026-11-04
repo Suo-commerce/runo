@@ -207,7 +207,7 @@ impl State {
         ))
     }
 
-    /// `install_fence`: from a `Grant` (an epoch fence) or a `Close` (`Closed`); never lowers.
+    /// `install_fence`: from a `Grant` (an epoch fence) or a `Closing` (`Closed`); never lowers.
     /// Returns the ack the store will give once the change is durable.
     pub fn prepare_install(
         &self,
@@ -237,7 +237,7 @@ impl State {
                 };
                 (change, enforced)
             }
-            Payload::Close { task, .. } => (
+            Payload::Closing { task } => (
                 Change::Close {
                     task: task.clone(),
                     close: id,
@@ -246,7 +246,7 @@ impl State {
             ),
             _ => {
                 return Err(StoreError::Route(
-                    "install_fence takes a Grant or a Close".into(),
+                    "install_fence takes a Grant or a Closing".into(),
                 ));
             }
         };

@@ -2,6 +2,7 @@
 //! dev-dependency everywhere; never ships in a binary. The one home for test fixtures.
 
 pub mod conformance;
+pub mod faults;
 pub mod fixture;
 
 use std::sync::atomic::{AtomicU64, Ordering};

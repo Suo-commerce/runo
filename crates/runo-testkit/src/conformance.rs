@@ -162,6 +162,8 @@ pub mod store {
             .await
             .unwrap();
         let snap = s.put_blob(b"snapshot").await.unwrap();
+        let closing = c.closing(&t);
+        s.append(&closing, level).await.unwrap();
         let close = c.close(&t, snap);
         assert!(
             matches!(s.record(&close, level).await, Err(StoreError::Route(_))),
@@ -173,7 +175,7 @@ pub mod store {
             "not a control kind"
         );
 
-        let ack = s.install_fence(&close).await.unwrap();
+        let ack = s.install_fence(&closing).await.unwrap();
         assert_eq!(ack.fence, Fence::Closed);
         assert_eq!(s.task_state(&t).await.unwrap(), TaskState::Closed);
         s.record(&close, level).await.unwrap();
@@ -243,8 +245,10 @@ pub mod store {
         assert_eq!(latest[0].n, 3);
 
         let snap = s.put_blob(b"closure snapshot").await.unwrap();
+        let closing = c.closing(&t);
+        s.append(&closing, level).await.unwrap();
         let close = c.close(&t, snap);
-        s.install_fence(&close).await.unwrap();
+        s.install_fence(&closing).await.unwrap();
         s.record(&close, level).await.unwrap();
         let late = c.work(&l, &t, Epoch(0), None);
         s.archive(&late, level).await.unwrap();
@@ -263,6 +267,7 @@ pub mod store {
             classes,
             [
                 RecordClass::Current,
+                RecordClass::Current, // the allocator's Closing, sung while the task was open
                 RecordClass::Control,
                 RecordClass::History
             ]
@@ -286,18 +291,218 @@ pub mod store {
     }
 }
 
+/// What the `FencedResource` suite needs from a resource under test: the resource, a way to make
+/// an authorizing verse readable where the resource looks for it, and a restart.
+#[async_trait::async_trait]
+pub trait FenceHarness: Send + Sync {
+    /// The resource.
+    fn resource(&self) -> &dyn runo_fence::FencedResource;
+    /// Make `v` readable by the resource (append it to the song it reads).
+    async fn publish(&self, v: &runo_core::Verse);
+    /// Restart the resource from what it persisted.
+    async fn restart(&mut self);
+}
+
 /// Run the `FencedResource` conformance suite: persisted, monotonic, never lowered, restart-safe;
 /// every ack names the resource, the authorizing verse, the fence now enforced and the durability
-/// reached; `Closed` installs through the same path as an epoch.
+/// reached; `Closed` installs through the same path as an epoch, from the task's `Closing`; a verse
+/// that authorizes nothing is refused.
 #[macro_export]
 macro_rules! fenced_resource_conformance {
     ($name:ident, $make:expr) => {
         #[tokio::test]
         async fn $name() {
-            let _resource = $make;
-            // milestone 5
+            $crate::conformance::fenced_resource_suite(&mut $make).await;
         }
     };
+}
+
+/// The `FencedResource` suite's body; see [`fenced_resource_conformance!`].
+///
+/// # Panics
+/// On the first rule the resource breaks.
+pub async fn fenced_resource_suite(h: &mut dyn FenceHarness) {
+    use runo_core::fence::{Durability, Fence};
+    use runo_core::{Epoch, TaskId};
+
+    use crate::fixture::{Chorus, lane};
+
+    let mut c = Chorus::new(1);
+    let (l, t) = (lane(0), TaskId("T-fence".into()));
+    let id = h.resource().id();
+    let g1 = c.grant_on(&l, &t, Epoch(1), vec![id.clone()]);
+    let g2 = c.grant_on(&l, &t, Epoch(2), vec![id.clone()]);
+    let work = c.work(&l, &t, Epoch(0), None);
+    for v in [&work, &g1, &g2] {
+        h.publish(v).await;
+    }
+    let ack = h
+        .resource()
+        .install(&l, &t, Fence::Epoch(Epoch(1)), g1.seal.sum)
+        .await
+        .unwrap();
+    assert_eq!(ack.resource, id, "the ack names the resource");
+    assert_eq!(ack.grant, g1.seal.sum, "the ack names the grant it answers");
+    assert_eq!(ack.fence, Fence::Epoch(Epoch(1)));
+    assert!(ack.durability >= Durability::Host, "durable before the ack");
+
+    let ack = h
+        .resource()
+        .install(&l, &t, Fence::Epoch(Epoch(2)), g2.seal.sum)
+        .await
+        .unwrap();
+    assert_eq!(ack.fence, Fence::Epoch(Epoch(2)));
+    let lower = h
+        .resource()
+        .install(&l, &t, Fence::Epoch(Epoch(1)), g1.seal.sum)
+        .await;
+    assert!(
+        lower.is_err()
+            || lower
+                .as_ref()
+                .is_ok_and(|a| a.fence == Fence::Epoch(Epoch(2))),
+        "never lowered: {lower:?}"
+    );
+
+    h.restart().await;
+    let again = h
+        .resource()
+        .install(&l, &t, Fence::Epoch(Epoch(1)), g1.seal.sum)
+        .await;
+    assert!(
+        again.is_err()
+            || again
+                .as_ref()
+                .is_ok_and(|a| a.fence == Fence::Epoch(Epoch(2))),
+        "still epoch 2 after a restart: {again:?}"
+    );
+
+    assert!(
+        h.resource()
+            .install(&l, &t, Fence::Epoch(Epoch(3)), work.seal.sum)
+            .await
+            .is_err(),
+        "a verse that authorizes nothing is refused"
+    );
+    assert!(
+        h.resource()
+            .install(&l, &t, Fence::Epoch(Epoch(5)), g2.seal.sum)
+            .await
+            .is_err(),
+        "a grant for another epoch is refused"
+    );
+
+    let closing = c.closing(&t);
+    h.publish(&closing).await;
+    let ack = h
+        .resource()
+        .install(&l, &t, Fence::Closed, closing.seal.sum)
+        .await
+        .unwrap();
+    assert_eq!(ack.fence, Fence::Closed);
+    assert_eq!(
+        ack.grant, closing.seal.sum,
+        "Closed answers the Closing verse"
+    );
+}
+
+/// Run the `AllocatorJournal` conformance suite: epochs are reserved before use and never reused
+/// (abandoned ones included); a pending reservation is returned, with its grant on a retry; a
+/// closing task takes no reservation; the first snapshot hash wins; all of it survives a restart.
+/// `$make` builds an empty journal; `$reopen` turns one into the journal a restarted allocator
+/// would open.
+#[macro_export]
+macro_rules! journal_conformance {
+    ($name:ident, $make:expr, $reopen:expr) => {
+        #[tokio::test]
+        async fn $name() {
+            let j = $make;
+            $crate::conformance::journal_suite_before(&j).await;
+            let j = ($reopen)(j);
+            $crate::conformance::journal_suite_after(&j).await;
+        }
+    };
+}
+
+/// The journal suite, before the restart.
+///
+/// # Panics
+/// On the first rule the journal breaks.
+pub async fn journal_suite_before(j: &dyn runo_fence::AllocatorJournal) {
+    use runo_core::ingress::TaskState;
+    use runo_core::{Epoch, Hash, TaskId, VerseId};
+
+    use crate::fixture::lane;
+
+    let (l, t) = (lane(0), TaskId("T-journal".into()));
+    let first_pick = j.reserve(&l, &t).await.unwrap();
+    assert_eq!(first_pick.epoch, Epoch(1));
+    assert_eq!(
+        j.reserve(&l, &t).await.unwrap().epoch,
+        Epoch(1),
+        "pending returned"
+    );
+    let g = VerseId(Hash([9; 32]));
+    j.granted(&l, &t, g).await.unwrap();
+    let retry = j.reserve(&l, &t).await.unwrap();
+    assert_eq!(
+        (retry.epoch, retry.grant),
+        (Epoch(1), Some(g)),
+        "a retry resumes the grant"
+    );
+    j.activated(&l, &t, g).await.unwrap();
+    assert_eq!(
+        j.reserve(&l, &t).await.unwrap().epoch,
+        Epoch(2),
+        "complete: a new epoch"
+    );
+    j.abandoned(&l, &t, Epoch(2)).await.unwrap();
+    assert_eq!(
+        j.reserve(&l, &t).await.unwrap().epoch,
+        Epoch(3),
+        "abandoned epochs stay used"
+    );
+
+    let closing = TaskId("T-closing".into());
+    j.set_task_state(&closing, TaskState::Closing, &[g], None)
+        .await
+        .unwrap();
+    assert!(
+        j.reserve(&lane(1), &closing).await.is_err(),
+        "closing: no new reservation"
+    );
+    let first = Hash([1; 32]);
+    assert_eq!(j.closure_snapshot(&closing, first).await.unwrap(), first);
+    assert_eq!(
+        j.closure_snapshot(&closing, Hash([2; 32])).await.unwrap(),
+        first,
+        "first wins"
+    );
+}
+
+/// The journal suite, after the restart.
+///
+/// # Panics
+/// On the first rule the journal forgot.
+pub async fn journal_suite_after(j: &dyn runo_fence::AllocatorJournal) {
+    use runo_core::ingress::TaskState;
+    use runo_core::{Epoch, Hash, TaskId};
+
+    use crate::fixture::lane;
+
+    let (l, t) = (lane(0), TaskId("T-journal".into()));
+    assert_eq!(
+        j.reserve(&l, &t).await.unwrap().epoch,
+        Epoch(3),
+        "the pending epoch survives"
+    );
+    let closing = TaskId("T-closing".into());
+    assert_eq!(j.task_state(&closing).await.unwrap(), TaskState::Closing);
+    assert_eq!(
+        j.closure_snapshot(&closing, Hash([3; 32])).await.unwrap(),
+        Hash([1; 32]),
+        "the persisted snapshot survives"
+    );
 }
 
 /// Run the `CadenceSource` conformance suite: a promise per state, version carried, fallback below ten.

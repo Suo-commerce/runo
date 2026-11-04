@@ -1,11 +1,21 @@
 //! Grants, activations, the resource guard, task lifecycle, the allocator's journal and
 //! operation keys (technical spec §8). The types a fence is spoken in come from `runo-core`.
+//!
+//! - [`Allocator`] runs the relaunch sequence and closure.
+//! - [`journal`] holds its durable state: [`journal::MemJournal`], [`journal::JsonlJournal`].
+//! - [`StoreResource`] makes the song store a [`FencedResource`].
+//! - [`FenceGuard`] is the check any other resource runs before it accepts a write.
+
+pub mod allocator;
+pub mod journal;
+
+pub use allocator::Allocator;
 
 use async_trait::async_trait;
 use runo_core::fence::{Fence, FenceAck};
 use runo_core::ingress::TaskState;
-use runo_core::{Epoch, Hash, ResourceId, SingerId, TaskId, Verse, VerseId};
-use runo_store::ResourceFenceStore;
+use runo_core::{Epoch, Hash, Payload, ResourceId, SingerId, TaskId, VerseId};
+use runo_store::{ResourceFenceStore, VerseReader};
 
 /// A fencing failure.
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +29,27 @@ pub enum FenceError {
     /// Underlying store failure.
     #[error(transparent)]
     Store(#[from] runo_store::StoreError),
+    /// The journal could not be read or written.
+    #[error("allocator journal: {0}")]
+    Journal(String),
+    /// The authorizing verse is not what the install asked for.
+    #[error("not an authority for this fence: {0}")]
+    Authority(String),
+    /// A guarded write was refused.
+    #[error("refused: {0}")]
+    Refused(String),
+    /// The allocator is misconfigured or could not sign.
+    #[error("{0}")]
+    Setup(String),
+}
+
+/// A reserved epoch, with the `Grant` already sung for it if a previous attempt got that far.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Reservation {
+    /// The epoch.
+    pub epoch: Epoch,
+    /// The grant, on a retry.
+    pub grant: Option<VerseId>,
 }
 
 /// The outcome of a relaunch.
@@ -59,12 +90,14 @@ pub trait FencedResource: Send + Sync {
 
 /// The song store as a fenced resource (technical decisions 3): the one adapter between
 /// [`FencedResource::install`], which every protected resource implements, and the store's own
-/// [`ResourceFenceStore::install_fence`], which takes the authorizing verse. The adapter fetches
-/// that verse by id, checks it is a `Grant` for `(singer, task)` at the requested epoch (or the
-/// task's `Close` for `Closed`), and only then delegates. Implemented in milestone 5.
+/// [`ResourceFenceStore::install_fence`], which takes the authorizing verse. It fetches that verse
+/// by id and checks it is a `Grant` for `(singer, task)` at the requested epoch, or the task's
+/// `Closing` for `Closed`, before it delegates.
 pub struct StoreResource<'a> {
-    /// The store, as the role traits the adapter needs.
-    pub store: &'a (dyn ResourceFenceStore + Sync),
+    /// Where the authorizing verse is read.
+    pub verses: &'a dyn VerseReader,
+    /// Where the fence is installed.
+    pub fences: &'a dyn ResourceFenceStore,
     /// How the store is named in grants.
     pub id: ResourceId,
 }
@@ -77,13 +110,97 @@ impl FencedResource for StoreResource<'_> {
 
     async fn install(
         &self,
-        _singer: &SingerId,
-        _task: &TaskId,
-        _fence: Fence,
-        _grant: VerseId,
+        singer: &SingerId,
+        task: &TaskId,
+        fence: Fence,
+        grant: VerseId,
     ) -> Result<FenceAck, FenceError> {
-        todo!("milestone 5: resolve the authorizing verse, validate it, then install_fence")
+        install_on_store(
+            self.verses,
+            self.fences,
+            &self.id,
+            singer,
+            task,
+            fence,
+            grant,
+        )
+        .await
     }
+}
+
+/// [`StoreResource`] that owns its handle to the store: for an allocator or a simulator that
+/// keeps resources in a list.
+pub struct SharedStoreResource {
+    /// The store.
+    pub store: std::sync::Arc<dyn runo_store::SongStore>,
+    /// How the store is named in grants.
+    pub id: ResourceId,
+}
+
+#[async_trait]
+impl FencedResource for SharedStoreResource {
+    fn id(&self) -> ResourceId {
+        self.id.clone()
+    }
+
+    async fn install(
+        &self,
+        singer: &SingerId,
+        task: &TaskId,
+        fence: Fence,
+        grant: VerseId,
+    ) -> Result<FenceAck, FenceError> {
+        install_on_store(
+            &*self.store,
+            &*self.store,
+            &self.id,
+            singer,
+            task,
+            fence,
+            grant,
+        )
+        .await
+    }
+}
+
+async fn install_on_store(
+    verses: &dyn VerseReader,
+    fences: &dyn ResourceFenceStore,
+    id: &ResourceId,
+    singer: &SingerId,
+    task: &TaskId,
+    fence: Fence,
+    grant: VerseId,
+) -> Result<FenceAck, FenceError> {
+    let Some(record) = verses.get(&grant).await? else {
+        return Err(FenceError::Authority(
+            "the authorizing verse is not in the store".into(),
+        ));
+    };
+    let v = &record.verse;
+    let ok = match (&v.payload, fence) {
+        (
+            Payload::Grant {
+                holder,
+                task: t,
+                epoch,
+                resources,
+            },
+            Fence::Epoch(e),
+        ) => holder == singer && t == task && *epoch == e && resources.contains(id),
+        (Payload::Closing { task: t }, Fence::Closed) => t == task,
+        _ => false,
+    };
+    if !ok {
+        return Err(FenceError::Authority(format!(
+            "{} does not authorize {fence:?} for {} on {} at {}",
+            runo_core::hash::display(&grant.0),
+            singer.0,
+            task.0,
+            id.0
+        )));
+    }
+    Ok(fences.install_fence(v).await?)
 }
 
 /// The allocator's own durable state (technical spec §8; technical decisions 5): epoch
@@ -93,10 +210,19 @@ impl FencedResource for StoreResource<'_> {
 #[async_trait]
 pub trait AllocatorJournal: Send + Sync {
     /// Reserve the next epoch for `(singer, task)`, persisted before anything else is done with
-    /// it; a pending reservation for the same key is returned instead of a new one.
-    async fn reserve(&self, singer: &SingerId, task: &TaskId) -> Result<Epoch, FenceError>;
+    /// it; a pending reservation for the same key (reserved, or granted but not activated) is
+    /// returned instead of a new one, with its grant if it has one. Refused while closing.
+    async fn reserve(&self, singer: &SingerId, task: &TaskId) -> Result<Reservation, FenceError>;
     /// Record the `Grant` verse that fulfilled a reservation.
     async fn granted(
+        &self,
+        singer: &SingerId,
+        task: &TaskId,
+        grant: VerseId,
+    ) -> Result<(), FenceError>;
+    /// Record that the grant was activated: the reservation is complete, and the next relaunch
+    /// of `(singer, task)` reserves a new epoch.
+    async fn activated(
         &self,
         singer: &SingerId,
         task: &TaskId,
@@ -111,38 +237,80 @@ pub trait AllocatorJournal: Send + Sync {
     ) -> Result<(), FenceError>;
     /// The task's lifecycle state as the allocator knows it.
     async fn task_state(&self, task: &TaskId) -> Result<TaskState, FenceError>;
-    /// Move the task to `Closing` with its frozen grant set, or to `Closed`.
+    /// Move the task to `Closing` (with its frozen grant set, and then the `Closing` verse that
+    /// authorizes the closed fences), or to `Closed`.
     async fn set_task_state(
         &self,
         task: &TaskId,
         state: TaskState,
         grants: &[VerseId],
+        authority: Option<VerseId>,
     ) -> Result<(), FenceError>;
     /// Persist the closure snapshot's hash before `Close` is sung; a second call for the same
     /// task returns the hash already recorded and ignores the new one.
     async fn closure_snapshot(&self, task: &TaskId, hash: Hash) -> Result<Hash, FenceError>;
-}
-
-/// The atomic check every write path calls inside the same critical section as the write.
-#[derive(Default)]
-pub struct FenceGuard {
-    _private: (),
-}
-
-impl FenceGuard {
-    /// Admit a write if its grant is installed here and an activation for it is known.
+    /// Everything recorded so far, folded: what a restarted allocator resumes from.
     ///
     /// # Errors
-    /// Returns `FenceError` on a stale epoch, unknown grant or closed task.
-    pub fn admit(
+    /// The journal cannot be read.
+    fn read(&self) -> Result<journal::JournalState, FenceError>;
+}
+
+/// The check any fenced resource other than the song store runs before it accepts a write on
+/// behalf of a task (the store runs the same rule inside `append_fenced`). The resource calls
+/// [`FenceGuard::admit`] inside the same critical section as the write.
+pub struct FenceGuard<'a> {
+    /// The fences installed at this resource.
+    pub fences: &'a dyn ResourceFenceStore,
+    /// Where grants and activations are read.
+    pub verses: &'a dyn VerseReader,
+    /// The roster's allocator: only its grants and activations count.
+    pub allocator: SingerId,
+}
+
+impl FenceGuard<'_> {
+    /// Admit a write by `singer` on `task` at `epoch` under `grant`: the installed fence must be
+    /// exactly this epoch (not lower, not closed), the grant must be the allocator's grant for
+    /// this chain, and `activation` must be the allocator's activation of that grant.
+    ///
+    /// # Errors
+    /// [`FenceError::Refused`] naming the rule, or a store failure.
+    pub async fn admit(
         &self,
-        _singer: &SingerId,
-        _task: &TaskId,
-        _epoch: Epoch,
-        _grant: &VerseId,
-        _activation: &VerseId,
+        singer: &SingerId,
+        task: &TaskId,
+        epoch: Epoch,
+        grant: &VerseId,
+        activation: &VerseId,
     ) -> Result<(), FenceError> {
-        todo!("milestone 5: runo-fence guard")
+        let refuse = |why: &str| Err(FenceError::Refused(why.to_owned()));
+        if self.fences.task_state(task).await? == TaskState::Closed {
+            return Err(FenceError::Closing);
+        }
+        match self.fences.installed_fence(singer, task).await? {
+            Some(Fence::Epoch(e)) if e == epoch => {}
+            Some(Fence::Closed) => return Err(FenceError::Closing),
+            Some(Fence::Epoch(e)) if e > epoch => return refuse("stale epoch"),
+            _ => return refuse("no fence installed for this epoch"),
+        }
+        let Some(g) = self.verses.get(grant).await? else {
+            return refuse("unknown grant");
+        };
+        let grant_ok = g.verse.header.singer == self.allocator
+            && matches!(&g.verse.payload, Payload::Grant { holder, task: t, epoch: e, .. }
+                if holder == singer && t == task && *e == epoch);
+        if !grant_ok {
+            return refuse("not the allocator's grant for this chain");
+        }
+        let Some(a) = self.verses.get(activation).await? else {
+            return refuse("unknown activation");
+        };
+        let activation_ok = a.verse.header.singer == self.allocator
+            && matches!(&a.verse.payload, Payload::Activation { grant: ag, .. } if ag == grant);
+        if !activation_ok {
+            return refuse("not the allocator's activation of this grant");
+        }
+        Ok(())
     }
 }
 
@@ -161,25 +329,4 @@ pub trait Dedup: Send + Sync {
     fn seen(&self, key: &OpKey) -> bool;
     /// Record that it has.
     fn mark(&self, key: &OpKey);
-}
-
-/// Marker for the allocator's side; `relaunch` and `close` are implemented in milestone 5.
-pub struct Allocator;
-
-impl Allocator {
-    /// The relaunch sequence (technical spec §8, steps 1–8).
-    ///
-    /// # Errors
-    /// Returns `FenceError` if the task is closing or storage fails.
-    pub fn relaunch(&self, _singer: &SingerId, _task: &TaskId) -> Result<Outcome, FenceError> {
-        todo!("milestone 5: runo-fence relaunch")
-    }
-
-    /// Closure: `Open -> Closing -> Closed`, fixed grant set, snapshot, `Close` verse.
-    ///
-    /// # Errors
-    /// Returns `FenceError` if storage fails.
-    pub fn close(&self, _task: &TaskId) -> Result<Verse, FenceError> {
-        todo!("milestone 5: runo-fence close")
-    }
 }

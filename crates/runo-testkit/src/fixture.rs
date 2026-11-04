@@ -9,8 +9,8 @@ use runo_core::ingress::{Decision, RosterHistory};
 use runo_core::sign::seal;
 use runo_core::{
     About, Cadence, ChainKey, Domains, Epoch, Header, Millis, PROTOCOL_VERSION, Payload, Progress,
-    Promise, Ref, ResourceAck, ResourceId, RosterDoc, RosterVersion, SingerId, TaskId, TaskSpec,
-    Timestamp, Verse, VerseId, VoiceEntry,
+    Promise, Ref, ResourceId, RosterDoc, RosterVersion, SingerId, TaskId, TaskSpec, Timestamp,
+    Verse, VerseId, VoiceEntry,
 };
 use runo_store::{FenceError, SongStore, StoreError};
 
@@ -158,6 +158,31 @@ impl Chorus {
     }
 
     /// The allocator's `Grant` for `holder` on `task` at `epoch`, fencing the song store.
+    /// The allocator's `Grant` naming exactly `resources`.
+    pub fn grant_on(
+        &mut self,
+        holder: &SingerId,
+        task: &TaskId,
+        epoch: Epoch,
+        resources: Vec<ResourceId>,
+    ) -> Verse {
+        let payload = Payload::Grant {
+            holder: holder.clone(),
+            task: task.clone(),
+            epoch,
+            resources,
+        };
+        self.sing(
+            &SingerId(ALLOCATOR.into()),
+            task,
+            Epoch(0),
+            None,
+            None,
+            payload,
+        )
+    }
+
+    /// The allocator's `Grant` of `epoch` on the song.
     pub fn grant(&mut self, holder: &SingerId, task: &TaskId, epoch: Epoch) -> Verse {
         let payload = Payload::Grant {
             holder: holder.clone(),
@@ -191,10 +216,11 @@ impl Chorus {
         };
         let acks = resources
             .iter()
-            .map(|r| ResourceAck {
+            .map(|r| runo_core::fence::FenceAck {
                 resource: r.clone(),
-                epoch: *epoch,
-                durable: true,
+                grant: grant.seal.sum,
+                fence: runo_core::fence::Fence::Epoch(*epoch),
+                durability: runo_core::fence::Durability::Host,
             })
             .collect();
         let payload = Payload::Activation {
@@ -205,6 +231,19 @@ impl Chorus {
         self.sing(
             &SingerId(ALLOCATOR.into()),
             &task,
+            Epoch(0),
+            None,
+            None,
+            payload,
+        )
+    }
+
+    /// The allocator's `Closing` of `task`: the verse that authorizes `Fence::Closed`.
+    pub fn closing(&mut self, task: &TaskId) -> Verse {
+        let payload = Payload::Closing { task: task.clone() };
+        self.sing(
+            &SingerId(ALLOCATOR.into()),
+            task,
             Epoch(0),
             None,
             None,

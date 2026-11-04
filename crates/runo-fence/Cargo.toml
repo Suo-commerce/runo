@@ -14,8 +14,15 @@
     runo-core = { workspace = true }
 runo-store = { workspace = true }
 async-trait = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 thiserror = { workspace = true }
 
 
     [dev-dependencies]
+async-trait = { workspace = true }
+runo-testkit = { workspace = true }
+tokio = { workspace = true }
 
