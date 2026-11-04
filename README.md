@@ -25,20 +25,22 @@ Until the Rust `diagnose` exists, the Python kit in `runo-replay/` is tier 1.
 - Runo Core: Technical Specification — the build plan (`docs/tech-spec.md`)
 - Runo Replay Report — the evidence from the HODD Bob pipeline (`docs/replay-report.md`)
 - Runo Against the HODD Bob Post-Mortem — the 27 anti-patterns mapped (`docs/post-mortem-mapping.md`)
+- Runo Core Technical Decisions, 3 Nov 2026 — the choices that reconciled the spec (`docs/technical-decisions-2026-11-03.md`)
 
 ## Workspace
 
-Eight library crates, a CLI and a simulator, layered so every crate depends only on crates below it
-and `runo-core` depends on nothing in the workspace. See `CLAUDE.md` for the design rules and the
+Nine library crates (eight Core crates and the herald adapter), a dev-only testkit, a CLI and a
+simulator, layered so every crate depends only on crates below it and `runo-core` depends on
+nothing in the workspace. See `CLAUDE.md` for the design rules and the
 ownership table.
 
 ```
-crates/runo-core      wire types, canonical CBOR, blake3, ed25519, pure ingress, time trait
+crates/runo-core      wire types, canonical CBOR, blake3, ed25519, pure ingress, fencing types, time trait
 crates/runo-profile   profile and chorus manifest TOML, load-time checks
 crates/runo-cadence   CadenceSource: fixed and corpus-read cadences
-crates/runo-store     SongStore and role traits, jsonl and in-memory backends, store service
+crates/runo-store     SongStore and its role traits, jsonl and in-memory backends, store service
 crates/runo-clock     the four clocks, escalation, suspicion
-crates/runo-fence     grants, activations, guard, task lifecycle, operation keys
+crates/runo-fence     grants, activations, guard, allocator journal, task lifecycle, operation keys
 crates/runo-node      the voice runtime: sing, refrain, probe, ladder
 crates/runo-scribe    closure snapshots, tomes, Merkle roots, addenda
 crates/runo-adapter-paperclip   the herald: Paperclip signals as peer verses

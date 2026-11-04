@@ -1,9 +1,11 @@
-//! Wire types, canonical encoding, hashing, signing, ingress decisions and the time trait.
+//! Wire types, canonical encoding, hashing, signing, ingress decisions, the shared fencing types and
+//! the time trait.
 //!
 //! This crate depends on nothing else in the workspace. Everything in it is plain data or a
 //! pure function; no I/O happens here. See the Runo Core Technical Specification §3–§4.
 
 pub mod codec;
+pub mod fence;
 pub mod hash;
 pub mod ingress;
 pub mod sign;

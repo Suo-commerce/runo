@@ -3,8 +3,8 @@
 
 pub mod merkle;
 
-use runo_core::ingress::StoreView;
 use runo_core::{Hash, Verse, VerseId};
+use runo_store::ScribeRead;
 
 /// A sealed tome.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -32,11 +32,11 @@ pub enum ScribeError {
 }
 
 /// Deterministic: same closure verse + same store contents => byte-identical manifest and root.
-/// Reads the closure snapshot, never live heads. Implemented in milestone 5.
+/// Reads the closure snapshot through `ScribeRead`, never live heads. Implemented in milestone 5.
 ///
 /// # Errors
 /// Returns `ScribeError` if the snapshot or a chain is missing.
-pub fn seal(_store: &dyn StoreView, _closure: &Verse) -> Result<Tome, ScribeError> {
+pub fn seal(_store: &dyn ScribeRead, _closure: &Verse) -> Result<Tome, ScribeError> {
     todo!("milestone 5: runo-scribe seal")
 }
 
@@ -44,6 +44,6 @@ pub fn seal(_store: &dyn StoreView, _closure: &Verse) -> Result<Tome, ScribeErro
 ///
 /// # Errors
 /// Returns `ScribeError::Mismatch` naming the first difference.
-pub fn verify(_store: &dyn StoreView, _tome: &Tome) -> Result<(), ScribeError> {
+pub fn verify(_store: &dyn ScribeRead, _tome: &Tome) -> Result<(), ScribeError> {
     todo!("milestone 5: runo-scribe verify")
 }

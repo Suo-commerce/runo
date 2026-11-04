@@ -21,7 +21,7 @@ source    = "corpus"      # last ten closed chains per unit and area; values bel
 building  = 30
 package   = 60
 waiting   = 60
-escalate  = [1.0, 1.5, 2.0]
+escalate  = [10, 15, 20]   # tenths: 1x, 1.5x, 2x
 
 [listen]
 to = ["foreman", "smith"]

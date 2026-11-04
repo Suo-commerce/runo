@@ -2,7 +2,7 @@
 
 Nov 2, 2026 · @Jarmo
 
-Runo Core is a Rust workspace of eight small library crates, a CLI and a simulator, that implements the Core layer of the Dwarven Song specification v3: signed per-task chains, the refrain, four clocks, a fenced store, a scribe and a node runtime — built against trait boundaries where every Later feature plugs in. This document is the build plan; the protocol itself is in the Song spec, and this document never restates a rule it can cite.
+Runo Core is a Rust workspace of nine library crates (eight Core crates and the herald adapter), a dev-only testkit, a CLI and a simulator, that implements the Core layer of the Dwarven Song specification v3: signed per-task chains, the refrain, four clocks, a fenced store, a scribe and a node runtime — built against trait boundaries where every Later feature plugs in. This document is the build plan; the protocol itself is in the Song spec, and this document never restates a rule it can cite.
 
 ## 1. Scope and build order
 
@@ -28,7 +28,7 @@ Core implements everything the Song spec marks **Core**; Later features are rese
 
 ## 2. Workspace
 
-One Cargo workspace, `runo/`, with eight Core library crates, the CLI and the simulator in a strict layering: every crate depends only on crates drawn below it, and `runo-core` depends on nothing in the workspace.
+One Cargo workspace, `runo/`, with nine library crates — eight Core crates and the herald adapter — a dev-only testkit, the CLI and the simulator in a strict layering: every crate depends only on crates drawn below it, and `runo-core` depends on nothing in the workspace.
 
 ```mermaid
 flowchart BT
@@ -80,17 +80,17 @@ flowchart BT
 
 | Crate | Owns | Depends on |
 | --- | --- | --- |
-| `runo-core` | Wire types, canonical CBOR, hashing, signing, ingress decisions, `Clock` and `Instant` | `serde`, `ciborium`, `blake3`, `ed25519-dalek` |
+| `runo-core` | Wire types, canonical CBOR, hashing, signing, ingress decisions, the shared fencing types (`Fence`, `FenceAck`, `Durability`, `RecordClass`), `Clock` and `Instant` | `serde`, `ciborium`, `blake3`, `ed25519-dalek` |
 | `runo-profile` | Profile and manifest TOML, load-time checks | `runo-core`, `toml` |
-| `runo-cadence` | `CadenceSource` trait and `FixedCadence` | `runo-core`, `runo-profile` |
-| `runo-store` | `SongStore` and its role traits, jsonl and in-memory backends, fence log, the store service and client | `runo-core`, `tokio` |
+| `runo-cadence` | `CadenceSource` trait, `FixedCadence` and `CorpusCadence` (§13); thresholds in `Millis`, factors in tenths | `runo-core`, `runo-profile` |
+| `runo-store` | `SongStore` and its role traits (`VerseReader`, `VerseWriter`, `ResourceFenceStore`, `RefrainSlot`, `ScribeRead`), jsonl and in-memory backends, the resource fence store, the store service and client | `runo-core`, `tokio` |
 | `runo-clock` | `Chorus`, four clocks, escalation, suspicion | `runo-core`, `runo-cadence` |
-| `runo-fence` | `Allocator`, `FencedResource`, `FenceGuard`, `OpKey`, task lifecycle | `runo-core`, `runo-store` |
+| `runo-fence` | `Allocator`, `AllocatorJournal`, `FencedResource`, `StoreResource`, `FenceGuard`, `OpKey`, task lifecycle | `runo-core`, `runo-store` |
 | `runo-node` | The voice runtime and its traits (`CallChannel`, `RecoveryAuthority`); the human `CallChannel` with dedup | all of the above |
 | `runo-scribe` | `seal`, `verify`, addenda, the runner | `runo-core`, `runo-store` |
-| `runo-adapter-paperclip` | The herald voice: Paperclip signals read from its database or API and sung as peer verses about lanes; Later, the fence allocator side | `runo-node`, `sqlx` or `reqwest` |
-| `runo-testkit` | Builders, fixture chorus, `SimClock`, `FailurePlan`, conformance macros (dev-dependency everywhere) | `runo-core`, `runo-store` |
-| `runo-sim` | Scenarios and the harness | `runo-node`, `runo-fence`, `runo-scribe`, `runo-testkit`, `madsim` or `turmoil` |
+| `runo-adapter-paperclip` | The herald voice: Paperclip signals read from its database or API and sung as peer verses about lanes; Later, the fence allocator side | `runo-node`, `reqwest` (the Paperclip API first; JSONL import for offline diagnosis; no database adapter in Core — decision 8) |
+| `runo-testkit` | Builders, fixture chorus, `SimClock`, `FailurePlan`, conformance macros (dev-dependency everywhere) | `runo-core`, `runo-store`, `runo-cadence` |
+| `runo-sim` | Scenarios and the harness | `runo-node`, `runo-fence`, `runo-scribe`, `runo-testkit`; the protocol stage needs no simulator crate (a deterministic event queue, `SimClock`, `MemStore`), and the runtime-stage simulator is chosen when that stage starts (decision 9) |
 | `runo-cli` | The `runo` binary | `runo-node`, `runo-scribe`, `runo-fence`, `runo-adapter-paperclip`, `clap` |
 
 **The herald.** The Paperclip adapter is a voice like any other, with role `herald` in the mine profile. It keeps every board event it reads as a raw observation and sings only peer-family verses *about* lanes, and only when a threshold is crossed: a `blocked` run is recorded as the start of a wait and becomes `Suspect { about: lane, clock: Waiting }` when that wait is overdue, never on sight; a `failed` run with a kind that never self-clears becomes `Suspect { clock: Task }` at once; a recovery action becomes a `Vouch` or `Suspect` with its reason. It never sings `Boundary` or `Work` on a lane's behalf, because a singer sings only its own chain.
@@ -110,18 +110,20 @@ The human `CallChannel` delivers one message per episode and level: a comment on
 
 Later crates (`runo-store-taso`, `runo-cadence-aegloss`, and the allocator side of `runo-adapter-paperclip`) implement Core traits and sit beside the workspace or in it behind feature flags; nothing in Core imports them. `runo-testkit` is a dev-dependency only and never ships in a binary.
 
-**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. Anything else needs a line in this table saying why.
+**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest`, because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8). The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
 
 ## 3. Data model
 
 All wire types live in `runo-core` and are plain data: no trait objects, no lifetimes, `serde` derives only. A Later feature adds fields as `Option` or `#[serde(default)]` and adds enum variants at the end; it never removes or retypes.
 
 ```rust
-pub struct VerseId(pub [u8; 32]);          // blake3 of the canonical bytes = `sum`
+pub struct Hash(pub [u8; 32]);             // a blake3 digest
+pub struct VerseId(pub Hash);              // blake3 of the canonical bytes = `sum`
 pub struct SingerId(pub String);
 pub struct TaskId(pub String);
 pub struct Epoch(pub u64);
 pub struct RosterVersion(pub u32);
+pub struct Millis(pub u64);                // every protocol duration: whole milliseconds, never a float (decision 6)
 
 pub struct Verse { pub header: Header, pub payload: Payload, pub seal: Seal }
 
@@ -148,11 +150,11 @@ pub enum Payload {
     // peer
     Ack        { about: About },
     Vouch      { about: About, how: VouchHow },
-    Suspect    { about: About, clock: Clock, overdue_by: Duration },
+    Suspect    { about: About, clock: Clock, overdue_by: Millis },
     Ruling     { about: About, verdict: Verdict, reason: Option<String> },
     // record: allocator only
     Grant      { holder: SingerId, task: TaskId, epoch: Epoch, resources: Vec<ResourceId> },
-    Activation { grant: VerseId, acks: Vec<ResourceAck> },
+    Activation { grant: VerseId, acks: Vec<ResourceAck> },   // ResourceAck { resource, epoch, durable: bool }: the wire form of a FenceAck (§8)
     Close      { task: TaskId, snapshot: Ref },            // ClosureSnapshot blob (§9)
     Tome       { close: VerseId, manifest: Ref, root: Hash },
     Addendum   { tome: VerseId, verse: VerseId },
@@ -170,7 +172,7 @@ pub struct Refrain {
 }
 
 pub struct Promise { pub unit: String, pub cadence: Cadence, pub checkpoints: bool, pub source: String }
-pub struct Cadence { pub call: Duration, pub again: Duration, pub suspect: Duration }   // absolute, computed at claim time
+pub struct Cadence { pub call: Millis, pub again: Millis, pub suspect: Millis }   // absolute, computed at claim time: ceil(base × tenths / 10) (decision 7)
 pub struct About { pub singer: SingerId, pub task: Option<TaskId>, pub epoch: Option<Epoch>, pub hash: Option<VerseId> }
 ```
 
@@ -216,9 +218,12 @@ pub struct TomeManifest {
 Every verse that reaches a node — from the local singer, from replication, or from a read — passes one pipeline in `runo-core::ingress`. It is pure: it takes the verse, the roster history and a view of the store, and returns a decision. The node applies the decision; nothing in the pipeline does I/O.
 
 ```rust
+/// How the store classified a record on admission (§7). In runo-core, so Stored can name it.
+pub enum RecordClass { Current, History, Control }
+
 pub enum Decision {
     Append { key: ChainKey, fork_of: Option<VerseId> },
-    Stored,                                      // byte-identical verse already in storage: nothing to append
+    Stored { class: RecordClass },               // byte-identical verse already in storage, under the class it was first admitted with (decision 10)
     Pending { waiting_for: Vec<VerseId> },      // prev, cause, grant or activation not yet known
     History,                                     // structurally valid, but epoch below the installed fence: archive only
     Control,                                     // allocator record (Close, Tome, Addendum) on a closed task: record, no effects
@@ -227,7 +232,18 @@ pub enum Decision {
 
 pub struct Incident { pub claimed_singer: SingerId, pub reason: RejectReason, pub via: Transport }
 
-pub fn admit(v: &Verse, rosters: &RosterHistory, view: &dyn StoreView) -> Decision;
+/// The synchronous validation facts ingress needs from the store, without I/O (decision 2).
+/// Reads for sealing are a different contract, ScribeRead (§7).
+pub trait IngressView {
+    fn stored_class(&self, id: &VerseId) -> Option<RecordClass>;      // step 2 reads the class, never decides one
+    fn get(&self, id: &VerseId) -> Option<Verse>;
+    fn variants(&self, key: &ChainKey, seq: u64) -> Vec<VerseId>;
+    fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Option<Epoch>;
+    fn task_state(&self, task: &TaskId) -> TaskState;
+    fn has_activation(&self, grant: &VerseId) -> bool;
+}
+
+pub fn admit(v: &Verse, rosters: &dyn RosterHistory, view: &dyn IngressView) -> Decision;
 ```
 
 **Two deduplications, not one.** `Stored` is storage's answer: this content hash is already appended, under the class it was first admitted with (§7). It says nothing about whether *this reader* has seen the verse. Each node keeps its own observer cursor over the store, and a verse is observed exactly once per node when that cursor first passes it, whether the decision was `Append` or `Stored`; a `Stored` record with class `History` is observed as history, never as live. Repeated reads behind the cursor have no effect. Two nodes reading one stored `Claimed` verse therefore each establish the task once and never reset it afterwards.
@@ -253,8 +269,6 @@ pub fn admit(v: &Verse, rosters: &RosterHistory, view: &dyn StoreView) -> Decisi
 
 Structural checks (1–11) complete before the fence decisions (12–13), so a `History` verse is always a well-formed verse.
 
-Structural checks (1–10) complete before the fence decision (11), so a `History` verse is always a well-formed verse.
-
 A `Reject` is recorded locally as an `Incident` and shown in the view. It never makes the node sing `Suspect`: a bad signature proves only that someone sent bytes naming that singer, not that the singer sent them, and integrity is not one of the four clocks. `Pending`, `History`, `Control` and `Stored` are silent.
 
 **Pending buffer.** Bounded per singer (default 256 verses, oldest evicted with a log line). When a missing verse arrives, every pending verse that waited on it is re-admitted in `seq` order. The node asks the store or a peer for a missing id with `fetch(VerseId)`; Core fetches from storage only, so a verse unknown to storage stays pending until replication brings it.
@@ -278,7 +292,7 @@ pub enum Observation<'a> {
 
 pub struct PeerClocks {
     reach_since: Instant, progress_since: Instant,
-    task: Option<TaskClock>,              // { claimed_at, promise, waits: Duration, checkpoints: bool }
+    task: Option<TaskClock>,              // { claimed_at, promise, waits: Millis, checkpoints: bool }
     waiting: Option<Instant>,             // set while blocked_on is present
     last_refrain_n: u64, last_height: u64,
     suspicion: [Level; 4],                // per clock: Quiet, Called, CalledAgain, Suspected
@@ -289,7 +303,7 @@ impl Chorus {
     pub fn observe(&mut self, now: Instant, from: &SingerId, o: Observation);
     pub fn tick(&mut self, now: Instant) -> Vec<Escalation>;   // what crossed a threshold since last tick
 }
-pub struct Escalation { pub peer: SingerId, pub task: Option<TaskId>, pub clock: Clock, pub level: Level, pub overdue_by: Duration }
+pub struct Escalation { pub peer: SingerId, pub task: Option<TaskId>, pub clock: Clock, pub level: Level, pub overdue_by: Millis }
 ```
 
 **Rules, as code paths.**
@@ -307,7 +321,7 @@ pub struct Escalation { pub peer: SingerId, pub task: Option<TaskId>, pub clock:
 | Each verse observed once per node | The observer cursor (§4); `Stored` verses ahead of the cursor are observed, verses behind it are not |
 | Vouch lowers reachability only, and only once | A vouch is consumed when applied: `tick` lowers `suspicion[Reachability]` one level if an unconsumed vouch from an independent voice is newer than `reach_since`, then marks it consumed; vouches older than one cadence are dropped |
 | Probe replies bind the challenge | `ProbeReply { challenge, singer, epoch, sig }` is an observation only if the challenge matches an outstanding one and `epoch` is the peer's current epoch |
-| Thresholds | `tick` compares each clock's elapsed to the promise's absolute `call`, `again`, `suspect` durations |
+| Thresholds | `tick` compares each clock's elapsed to the promise's absolute `call`, `again`, `suspect` thresholds in milliseconds, each ceil(base × tenths / 10) and refused at load if it overflows |
 | Independence weighting | `Vouch` from a voice sharing a declared domain counts half; from the same domain set, not at all |
 
 **Acceptance test for waiting.** A lane blocks for longer than its task deadline: only the waiting clock escalates. When it resumes, task elapsed continues from the value it had when the block began.
@@ -348,7 +362,7 @@ pub struct Node<S: SongStore, C: CallChannel, R: RecoveryAuthority, K: Clock> { 
 
 1. `Called` → `CallChannel::call` with the clock, the promise and the elapsed time, in one line.
 2. `CalledAgain` → `call` again; for reachability, also `probe` directly and, on failure, `ask_probe` through one independent voice, which sings `Vouch` or `Suspect` on the node's behalf.
-3. `Suspected` → the node sings `Suspect { clock, overdue_by }` and sends `RecoveryAuthority::report` with its suspicion and the vouches and suspects it holds from others. **It does nothing else.** Relaunch, if any, is the authority's decision and arrives as a `Fence` verse.
+3. `Suspected` → the node sings `Suspect { clock, overdue_by }` and sends `RecoveryAuthority::report` with its suspicion and the vouches and suspects it holds from others. **It does nothing else.** Relaunch, if any, is the authority's decision and arrives as a `Grant` followed by an `Activation`.
 
 **Acks.** The node acks only verses whose kind asks to be heard (§4 of the Song spec); `Ack`, `Vouch`, `Suspect` and refrains are never acked. An ack carries the full `About` with the verse hash.
 
@@ -363,35 +377,54 @@ pub struct Node<S: SongStore, C: CallChannel, R: RecoveryAuthority, K: Clock> { 
 **Ownership.** In Core exactly one process owns a chorus's store: the **store service** (`runo store serve`), which opens the backend and exposes the trait over a transport — a Unix socket on the host, and TCP on the chorus's private network (WireGuard in the mine) for voices on other hosts. Nodes and CLI commands never open the backend themselves; they hold a `StoreClient` that implements `SongStore` over the transport. This makes `append_fenced`'s atomic step a single-process critical section regardless of how many voices or hosts there are, at the cost of one store host per chorus in Core. Taso removes that single host Later; the trait and the client do not change.
 
 ```rust
-/// How the store classified a record on admission. Persisted beside the verse's unchanged bytes;
-/// the signed bytes themselves never carry local state.
+/// How the store classified a record on admission (runo-core::ingress). Persisted beside the
+/// verse's unchanged bytes; the signed bytes themselves never carry local state.
 pub enum RecordClass { Current, History, Control }
 
 /// What a read returns: the verse exactly as sung, plus what this store knows about it.
 pub struct Record { pub verse: Verse, pub class: RecordClass, pub cursor: Cursor }
 
-#[async_trait]
-pub trait SongStore: Send + Sync {
-    // --- current work: authority validated, fence enforced atomically ---
-    async fn append(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;          // unfenced chains only
-    async fn append_fenced(&self, v: &Verse, level: Durability) -> Result<Receipt, FenceError>;   // fenced chains
-    // --- historical evidence: validated, bytes kept unchanged, no effects, no live clocks ---
-    async fn archive(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;         // for Decision::History
-    // --- control records: allowed on a closed task, allocator only ---
-    async fn record(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;          // for Decision::Control
-    // --- fences and task lifecycle ---
-    async fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError>;
-    async fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Result<Option<Fence>, StoreError>;
-    async fn task_state(&self, task: &TaskId) -> Result<TaskState, StoreError>;                   // Open | Closing | Closed
-    // --- refrains and reads ---
-    async fn refrain(&self, r: &Refrain) -> Result<(), StoreError>;
-    async fn latest_refrains(&self) -> Result<Vec<Refrain>, StoreError>;
+// Durability, Fence and FenceAck are runo-core::fence types (§8), re-exported here.
+
+// Role traits (CLAUDE.md: callers take the role they need, never the whole store).
+#[async_trait] pub trait VerseReader: Send + Sync {
     async fn read_since(&self, cursor: Cursor) -> Result<(Vec<Record>, Cursor), StoreError>;
     async fn get(&self, id: &VerseId) -> Result<Option<Record>, StoreError>;
     async fn head(&self, singer: &SingerId, task: &TaskId) -> Result<Option<Head>, StoreError>;
-    async fn put_blob(&self, bytes: &[u8]) -> Result<Hash, StoreError>;
     async fn get_blob(&self, h: &Hash) -> Result<Option<Vec<u8>>, StoreError>;
 }
+#[async_trait] pub trait VerseWriter: Send + Sync {
+    // --- current work: authority validated, fence enforced atomically; persists Current ---
+    async fn append(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;          // unfenced chains only
+    async fn append_fenced(&self, v: &Verse, level: Durability) -> Result<Receipt, FenceError>;   // fenced chains
+    // --- historical evidence: validated, bytes kept unchanged, no effects, no live clocks; persists History ---
+    async fn archive(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;         // for Decision::History
+    // --- control records: allowed on a closed task, allocator only; persists Control ---
+    async fn record(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError>;          // for Decision::Control
+    async fn put_blob(&self, bytes: &[u8]) -> Result<Hash, StoreError>;
+}
+/// The store's own installed fences and task lifecycle: the song as the first fenced resource
+/// (decisions 3 and 5). The allocator's reservations and closure record are a different contract,
+/// AllocatorJournal in runo-fence (§8); the two may share a backend.
+#[async_trait] pub trait ResourceFenceStore: Send + Sync {
+    async fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError>;   // a Grant (epoch) or a Close (Closed); durable before the ack; never lowers
+    async fn installed_fence(&self, singer: &SingerId, task: &TaskId) -> Result<Option<Fence>, StoreError>;
+    async fn task_state(&self, task: &TaskId) -> Result<TaskState, StoreError>;                   // Open | Closing | Closed
+}
+#[async_trait] pub trait RefrainSlot: Send + Sync {
+    async fn refrain(&self, r: &Refrain) -> Result<(), StoreError>;
+    async fn latest_refrains(&self) -> Result<Vec<Refrain>, StoreError>;
+}
+/// Reads for sealing and verification (§9; decision 2): the snapshot a Close names, blobs, and
+/// every record of a task including its history. Distinct from runo_core::ingress::IngressView.
+#[async_trait] pub trait ScribeRead: Send + Sync {
+    async fn snapshot(&self, close: &VerseId) -> Result<Option<Vec<u8>>, StoreError>;
+    async fn blob(&self, h: &Hash) -> Result<Option<Vec<u8>>, StoreError>;
+    async fn task_records(&self, task: &TaskId) -> Result<Vec<Record>, StoreError>;
+}
+
+/// The whole store: the sum of the role traits.
+pub trait SongStore: VerseReader + VerseWriter + ResourceFenceStore + RefrainSlot + ScribeRead {}
 ```
 
 One API, three routes. The node picks the route from the ingress decision: `Append` goes to `append` or `append_fenced` by chain kind, `History` to `archive`, `Control` to `record`. The store enforces the routing too: `append` refuses fenced chains, `append_fenced` refuses stale or closed work, `archive` refuses anything that is not below the installed fence or on a closed task, and `record` accepts only allocator kinds. Each route persists the `RecordClass` beside the verse (in jsonl, a wrapper object per line: `{"class": "history", "verse": …}`; the verse bytes inside are untouched), so a reader's observer skips `History` for live clocks and the scribe finds addenda, and storage deduplication never erases whether a record was evidence or work: a byte-identical re-admission returns `Stored` **with the persisted class**, which is why the `Stored` check in §4 reads the class rather than deciding one.
@@ -425,9 +458,20 @@ One directory per chorus. Human-readable, grep-able, and the format the replay h
 `runo-fence` has two halves: the allocator client a control plane uses to grant epochs, and the guard a resource embeds to enforce them. The song store is the first guarded resource; the mine's merge gate is the second.
 
 ```rust
-// Allocator side: the control plane holds the allocator key and runs this.
-pub struct Allocator<S: SongStore> { /* key, store, reservations: FenceLog, resources: Vec<Box<dyn FencedResource>> */ }
-impl<S: SongStore> Allocator<S> {
+// Shared types, in runo-core (decisions 1 and 4): every crate that installs, acknowledges or
+// reads a fence speaks these; nothing in core does I/O.
+pub enum Durability { Process, Host, Replicated(u8) }
+pub enum Fence { Epoch(Epoch), Closed }          // Closed is above every epoch: nothing writes after it
+pub struct FenceAck {                             // explicit: never supplied from the caller's context
+    pub resource: ResourceId,                     // which resource persisted it
+    pub grant: VerseId,                           // the Grant it answers; the Close verse for Fence::Closed
+    pub fence: Fence,                             // the fence now enforced
+    pub durability: Durability,                   // reached before this ack
+}
+
+// Allocator side, in runo-fence: the control plane holds the allocator key and runs this.
+pub struct Allocator<S: SongStore, J: AllocatorJournal> { /* key, store, journal, resources: Vec<Box<dyn FencedResource>> */ }
+impl<S: SongStore, J: AllocatorJournal> Allocator<S, J> {
     /// Reserve the next epoch (persisted), sing Grant, install at every resource, sing Activation.
     /// Serialized per (singer, task); a duplicate request while one is pending returns the pending grant.
     pub async fn relaunch(&self, singer: &SingerId, task: &TaskId) -> Result<Outcome, FenceError>;
@@ -436,14 +480,31 @@ impl<S: SongStore> Allocator<S> {
 }
 pub enum Outcome { Activated { grant: VerseId, activation: VerseId }, NotActivated { grant: VerseId, missing: Vec<ResourceId> } }
 
+/// The allocator's own durable state (decision 5): reservations, pending grants, task lifecycle,
+/// the closure record with its snapshot hash. Distinct from the store's ResourceFenceStore even
+/// where they share a backend; this is what a crashed allocator resumes from.
+#[async_trait] pub trait AllocatorJournal: Send + Sync {
+    async fn reserve(&self, singer: &SingerId, task: &TaskId) -> Result<Epoch, FenceError>;   // pending one returned, never a new one
+    async fn granted(&self, singer: &SingerId, task: &TaskId, grant: VerseId) -> Result<(), FenceError>;
+    async fn abandoned(&self, singer: &SingerId, task: &TaskId, epoch: Epoch) -> Result<(), FenceError>;
+    async fn task_state(&self, task: &TaskId) -> Result<TaskState, FenceError>;
+    async fn set_task_state(&self, task: &TaskId, state: TaskState, grants: &[VerseId]) -> Result<(), FenceError>;
+    async fn closure_snapshot(&self, task: &TaskId, hash: Hash) -> Result<Hash, FenceError>;  // first hash wins
+}
+
 // Resource side: anything that accepts writes on behalf of a task.
 #[async_trait] pub trait FencedResource: Send + Sync {
     fn id(&self) -> ResourceId;
-    /// Persist (singer, task) -> max(epoch, existing) with the grant id; never lowers.
+    /// Persist (singer, task) -> max(fence, existing) with the authorizing verse's id; never lowers.
+    /// grant is the Grant for an epoch fence, the Close verse for Fence::Closed.
     async fn install(&self, singer: &SingerId, task: &TaskId, fence: Fence, grant: VerseId) -> Result<FenceAck, FenceError>;
 }
-pub enum Fence { Epoch(Epoch), Closed }          // Closed is above every epoch: nothing writes after it
-pub struct FenceGuard { /* persisted map (singer, task) -> (Fence, grant) */ }
+/// The song store as a fenced resource (decision 3): the one adapter between FencedResource::install
+/// and the store's own install_fence(&Verse). It fetches the authorizing verse by id, checks it is a
+/// Grant for (singer, task) at the requested epoch (or the task's Close for Closed), then delegates.
+pub struct StoreResource<'a> { pub store: &'a dyn ResourceFenceStore, pub id: ResourceId }
+
+pub struct FenceGuard { /* over a ResourceFenceStore: (singer, task) -> (Fence, grant) */ }
 impl FenceGuard {
     /// The atomic check every write path calls, inside the same critical section as the write.
     /// Requires the grant to be installed here AND an Activation for it to be known.
@@ -454,9 +515,9 @@ impl FenceGuard {
 **Relaunch sequence.** Numbered so the TLA+ model and the simulator can name each step.
 
 1. The authority decides to relaunch (on a `SuspicionReport`, outside Runo's control). Requests for the same `(singer, task)` are serialized; a second request while one is in flight returns the first's pending grant, so the race test's "exactly one epoch" is a rule, not luck.
-2. `Allocator::relaunch` reserves `epoch = reserved + 1` in its own persisted `FenceLog` **before** anything else. A crash after this step resumes from the reservation; the epoch is never reused.
+2. `Allocator::relaunch` reserves `epoch = reserved + 1` in its own persisted `AllocatorJournal` **before** anything else. A crash after this step resumes from the reservation; the epoch is never reused.
 3. It sings `Grant { holder, task, epoch, resources }`. The grant's hash is now known.
-4. For every resource in `resources`: `install(singer, task, Fence::Epoch(epoch), grant_id)`. Each resource persists the fence at `Host` or better, refuses to lower an existing higher fence, and returns `FenceAck { resource, epoch, durable: true }`.
+4. For every resource in `resources`: `install(singer, task, Fence::Epoch(epoch), grant_id)`. Each resource persists the fence at `Host` or better, refuses to lower an existing higher fence, and returns `FenceAck { resource, grant, fence: Epoch(epoch), durability }` — every field explicit, none supplied from the allocator's own context.
 5. If any resource fails to acknowledge, the allocator stops and returns `NotActivated`. The grant stays in the song, unactivated; no replacement starts. A later retry reinstalls on the missing resources and continues from step 6 with the same grant.
 6. With every ack in hand, it sings `Activation { grant, acks }` and only then starts the replacement with the grant id.
 7. The replacement's first verse is `Claimed` with `grant` set; every write it makes carries the grant, and every guard requires both the installed grant and a known `Activation` for it.
@@ -466,17 +527,17 @@ impl FenceGuard {
 
 **Task lifecycle.** The allocator keeps a durable state per task: `Open → Closing → Closed`. Relaunch is serialized per `(singer, task)`, but closure spans every singer on the task, so the two are serialized against each other at task scope, and the closure snapshot is captured once and reused on every retry — a fixed grant set does not imply fixed chain heads, because delayed records keep entering the archive.
 
-1. `close` writes `Closing` to the allocator's `FenceLog`. From that moment no new reservation or activation for any singer on that task is accepted.
-2. **Settle reservations.** Every reservation in flight either becomes a grant (its `Grant` verse is appended) or is durably marked abandoned in the `FenceLog` after a bounded wait (the profile's `reservation_timeout`, 60 s by default). Only then is the grant set frozen and written to the log.
+1. `close` writes `Closing` to the allocator's `AllocatorJournal`. From that moment no new reservation or activation for any singer on that task is accepted.
+2. **Settle reservations.** Every reservation in flight either becomes a grant (its `Grant` verse is appended) or is durably marked abandoned in the `AllocatorJournal` after a bounded wait (the profile's `reservation_timeout`, 60 s by default). Only then is the grant set frozen and written to the log.
 3. **Close resources.** Install `Fence::Closed` at every resource named by any grant in the frozen set; each persists and acknowledges.
-4. **Capture the snapshot once.** At a defined store boundary — the store cursor at the moment every `Closed` ack is in — read the chain heads and the fork index for the frozen grants, build the `ClosureSnapshot`, store it as a blob, and **persist its hash in the closure record of the `FenceLog`** before anything else.
+4. **Capture the snapshot once.** At a defined store boundary — the store cursor at the moment every `Closed` ack is in — read the chain heads and the fork index for the frozen grants, build the `ClosureSnapshot`, store it as a blob, and **persist its hash in the closure record of the `AllocatorJournal`** before anything else.
 5. Sing `Close { task, snapshot }` naming that hash, and write `Closed`.
 
 **Crash recovery.** On restart the allocator resumes from the recorded step. If the snapshot hash is already in the closure record, steps 4–5 reuse that exact blob; the snapshot is never recomputed, even if a late fork has since entered the archive. If it is not, the allocator is before step 4 and proceeds from the frozen grant set. The crash test for this is `close-crash`: crash between snapshot persistence and `Close`, with a late archived fork arriving before restart; the published snapshot must equal the persisted one.
 
 Closure stops work: anything arriving for the task afterwards is `History` at the store and refused at every other resource. The protocol's own records — `Close`, `Tome`, `Addendum` — still land on a closed task through `record`. A closed task is never reopened; follow-up work is a new task with `cause` = the `Close` verse.
 
-**Persistence.** `FenceGuard` is generic over a `FenceLog` (jsonl file in Core; a Taso record Later). On restart it reloads and takes the maximum epoch per key, so a crash between install and ack cannot lower a fence; it can only leave an ack missing, which step 4 handles.
+**Persistence.** `FenceGuard` is generic over a `ResourceFenceStore` (jsonl file in Core; a Taso record Later). On restart it reloads and takes the maximum epoch per key, so a crash between install and ack cannot lower a fence; it can only leave an ack missing, which step 5 of the relaunch sequence handles.
 
 **External effects.** `runo-fence` ships `OpKey::new(task, operation_id)` and a small `Dedup` trait a consumer implements for each unfenced effect; the node refuses to start a replacement whose profile lists an effect as neither fenced nor keyed unless the profile marks it `accepted_risk = true`. This is the spec's "named as a risk, never assumed safe", enforced at configuration time.
 
@@ -486,8 +547,9 @@ Closure stops work: anything arriving for the task afterwards is `History` at th
 
 ```rust
 /// Deterministic: same closure verse + same store contents => byte-identical manifest and root.
-pub fn seal(store: &dyn StoreView, closure: &Verse) -> Result<Tome, ScribeError>;
-pub fn verify(store: &dyn StoreView, tome: &Tome) -> Result<(), ScribeError>;
+/// Reads through ScribeRead (§7): the snapshot a Close names, blobs, a task's records of every class.
+pub fn seal(store: &dyn ScribeRead, closure: &Verse) -> Result<Tome, ScribeError>;
+pub fn verify(store: &dyn ScribeRead, tome: &Tome) -> Result<(), ScribeError>;
 ```
 
 **Closure trigger.** The runner watches `read_since` for `Close` verses from the roster's allocator. For each, it calls `seal`, stores the manifest blob, and asks the allocator's node to sing the `Tome` verse (the scribe cannot sign; the allocator, which authorized closure, carries the tome into the song with `cause` = the `Close` verse). A `Tome` the allocator refuses to sing is a liveness failure of the allocator, visible as L1.
@@ -509,7 +571,7 @@ pub fn verify(store: &dyn StoreView, tome: &Tome) -> Result<(), ScribeError>;
 
 ## 10. Profiles and the chorus manifest
 
-Both are TOML, checked into the consumer's repo, loaded by `runo-core::profile`. A profile holds exactly the four things the Song spec allows; everything else is refused at load with the offending key named.
+Both are TOML, checked into the consumer's repo, loaded by `runo-profile`. A profile holds exactly the four things the Song spec allows; everything else is refused at load with the offending key named.
 
 ```toml
 # profiles/lane.toml — a Dwarven Mine lane
@@ -530,12 +592,12 @@ transitions = [
   ["*",        "exited"],
 ]
 
-[cadence]                             # Core: fixed per state, minutes; Later: a CadenceSource overrides
-source    = "fixed"
+[cadence]                             # Core: fixed per state, minutes, or corpus with these as fallback; Later: Aegloss
+source    = "corpus"
 building  = 30
 package   = 60                        # waiting on a ruling
 waiting   = 60
-escalate  = [1.0, 1.5, 2.0]
+escalate  = [10, 15, 20]              # integer tenths: 1x, 1.5x, 2x; never floats (decision 6)
 
 [listen]
 to = ["foreman", "smith"]            # roles this voice keeps clocks for
@@ -598,21 +660,26 @@ network  = "lan"
 
 `runo` is one binary (`runo-cli`) with subcommands. Agents call `runo sing` and `runo listen` from their playbooks, exactly as v0.1's `sing.py` and `listen.py` were meant to be called; the node daemon is for voices that run continuously.
 
-| Command | Who | Does |
-| --- | --- | --- |
-| `runo init chorus.toml` | Owner, once | Load-time checks (§10); writes `roster.v1.cbor` unsigned and prints its hash for the owner to sign with the hardware token (`runo init --sign` when the token is present) |
-| `runo enroll --singer lane-1 --chorus hodd-mine` | Each host | Generates the key in the host's key home (§6 of the Song spec), fingerprints the credential reference, writes `enroll/lane-1.cbor` for `init` to pick up |
-| `runo store serve --chorus hodd-mine` | The store host, one per chorus | Owns the backend; serves `SongStore` over a Unix socket and the private network |
-| `runo node --profile profiles/lane.toml` | Every monitored voice | Runs the four loops (§6) against the store service; exposes a local socket for `sing` and `status` |
-| `runo sing claimed --task HOD-42 --unit siege_tank` | Agent playbooks | Builds and sings one verse through the local node. Without a node, `--record-only` sings straight to the store service: no refrain, no probe loop, so the voice is recorded but not monitored, and the view labels it so |
-| `runo sing work --task HOD-42 --head a3f9c1d --changed src/` | Agent playbooks | A `Work` verse |
-| `runo sing waiting --task HOD-42 --blocked-on human` | Agent playbooks | A `Boundary` with `blocked_on` |
-| `runo listen [--voice X] [--overdue]` | Agent playbooks, humans | Latest verse and refrain per voice, four clocks, suspicion, incidents; `--overdue` prints only crossings. v0.1's `listen.py`, made real |
-| `runo view` | Owner | The owner's view: one row per voice, four clocks, waits, gray-work signals, incidents, tempo bar; refreshes on the probe interval |
-| `runo verify --tome <hash>` | Anyone | Recomputes a tome from its snapshot and reports the first mismatch |
-| `runo fence relaunch --singer lane-1 --task HOD-42` | The allocator's host only | The relaunch sequence (§8); refuses without the allocator key |
-| `runo fence close --task HOD-42` | The allocator's host only | Closure (§8) |
-| `runo replay --paperclip dir --forgejo dir` | Anyone | The Python replay, ported, so the detectors under test are the shipped ones |
+| Command | Who | Does | Status |
+| --- | --- | --- | --- |
+| `runo diagnose --paperclip <db-or-jsonl> [--forge <url>]` | Anyone with read access to a board | Tier 1 (§15): the replay report on an existing pipeline, read-only by construction; the Paperclip API first, a JSONL export for offline use. Until it exists, the Python kit in runo-replay/ is tier 1 | Planned, milestone 3 |
+| `runo watch --paperclip <db> --notify telegram:<chat>` | The owner, one process on any box that can read the board | Tier 2 (§15): the herald as a chorus of one, the triage view and the call ladder with the human CallChannel; episodes folded per lane, waits shown only when overdue, reachability shown as unknown | Planned, milestone 3 |
+| `runo doctor` | Whoever sets a pipeline up | Prints every key with its default, what it can reach and what it would do; nothing writes to a board without --apply (§15 rules) | Planned, milestone 3 |
+| `runo init chorus.toml` | Owner, once | Load-time checks (§10); writes `roster.v1.cbor` unsigned and prints its hash for the owner to sign with the hardware token (`runo init --sign` when the token is present) | Planned, milestone 6 |
+| `runo enroll --singer lane-1 --chorus hodd-mine` | Each host | Generates the key in the host's key home (§6 of the Song spec), fingerprints the credential reference, writes `enroll/lane-1.cbor` for `init` to pick up | Planned, milestone 6 |
+| `runo store serve --chorus hodd-mine` | The store host, one per chorus | Owns the backend; serves `SongStore` over a Unix socket and the private network | Planned, milestone 2 |
+| `runo node --profile profiles/lane.toml` | Every monitored voice | Runs the four loops (§6) against the store service; exposes a local socket for `sing` and `status` | Planned, milestone 4 |
+| `runo sing claimed --task HOD-42 --unit siege_tank` | Agent playbooks | Builds and sings one verse through the local node. Without a node, `--record-only` sings straight to the store service: no refrain, no probe loop, so the voice is recorded but not monitored, and the view labels it so | Planned, milestone 4 |
+| `runo sing work --task HOD-42 --head a3f9c1d --changed src/` | Agent playbooks | A `Work` verse | Planned, milestone 4 |
+| `runo sing waiting --task HOD-42 --blocked-on human` | Agent playbooks | A `Boundary` with `blocked_on` | Planned, milestone 4 |
+| `runo listen [--voice X] [--overdue]` | Agent playbooks, humans | Latest verse and refrain per voice, four clocks, suspicion, incidents; `--overdue` prints only crossings. v0.1's `listen.py`, made real | Planned, milestone 4 |
+| `runo view` | Owner | The owner's view: one row per voice, four clocks, waits, gray-work signals, incidents, tempo bar; refreshes on the probe interval | Planned, milestone 3 |
+| `runo verify --tome <hash>` | Anyone | Recomputes a tome from its snapshot and reports the first mismatch | Planned, milestone 5 |
+| `runo fence relaunch --singer lane-1 --task HOD-42` | The allocator's host only | The relaunch sequence (§8); refuses without the allocator key | Planned, milestone 5 |
+| `runo fence close --task HOD-42` | The allocator's host only | Closure (§8) | Planned, milestone 5 |
+| `runo replay --paperclip dir --forgejo dir` | Anyone | The Python replay, ported, so the detectors under test are the shipped ones | Planned, milestone 4 |
+
+No command is implemented yet; the milestone in the Status column is where each one lands (§14). `diagnose`, `watch` and `doctor` are the three-tier commands of §15; until `diagnose` exists, the Python kit in `runo-replay/` is tier 1.
 
 **Output.** Every command prints human text to stdout and, with `--json`, one JSON object per line. `listen --json` is what the dashboard and the Paperclip adapter consume.
 
@@ -629,13 +696,13 @@ Four layers, each answering a different question. All of them run in CI on every
 | Unit | `cargo test` | Does each function do what §3–§9 say? | Every crate |
 | Property | `proptest` | Do the invariants hold for arbitrary inputs? | `runo-core`, `runo-clock`, `runo-scribe` |
 | Model | TLA+ with TLC | Is the protocol safe and live under every interleaving of a small instance? | `model/` |
-| Simulation | Deterministic simulator (`madsim`, or `turmoil` for the network plus `SimClock` and `MemStore`) | Does the implementation hold the invariants under injected failure? | `runo-sim` |
+| Simulation | Deterministic simulator, in two stages: protocol first (the real state machines over `SimClock`, `MemStore` and a deterministic event queue), runtime later (async scheduling and the network; `madsim` versus `turmoil` is decided then). Scenario intentions and invariant assertions are reused across both; identical interleavings are not required | Does the implementation hold the invariants under injected failure? | `runo-sim` |
 
-**Property tests worth naming.** Canonical encoding is a bijection on valid values and round-trips through JSON; `admit` on a shuffled valid chain, fed through the pending buffer, appends every verse exactly once in `seq` order; `seal` is deterministic across shuffles and byte-identical across two independent `StoreView`s with the same contents; `tick` never emits the same crossing twice; a refrain stream with duplicates and regressions produces the same clock state as the deduplicated stream.
+**Property tests worth naming.** Canonical encoding is a bijection on valid values and round-trips through JSON; `admit` on a shuffled valid chain, fed through the pending buffer, appends every verse exactly once in `seq` order; `seal` is deterministic across shuffles and byte-identical across two independent `ScribeRead`s with the same contents; `tick` never emits the same crossing twice; a refrain stream with duplicates and regressions produces the same clock state as the deduplicated stream.
 
 **The TLA+ model** (`model/Runo.tla`) has three voices, one allocator, two tasks, epochs 0–2, a store with two replicas, and the actions: `Claim`, `Sing`, `Refrain`, `Suspect`, `Reserve`, `Grant`, `Install(replica)`, `Activate`, `OldWrite`, `ReplicaRestart`, `Close`, `Seal`, `LateVerse`. It checks S1–S4 as invariants and L1 as liveness under weak fairness of the allocator and the scribe. L3 is **not** in the model: rulings and their application are consumer behaviour, so L3 is checked only by simulation and the replay, and the spec says so. Every action name is also a `runo-sim` event name, so a counterexample trace from TLC is replayable as a simulation scenario.
 
-**Simulation scenarios** are the ten failures in the Song spec §10 plus the four contract tests below, each a file in `runo-sim/scenarios/`, plus every TLC counterexample ever found. The harness runs N seeds per scenario and checks S1–S4 after every step. Liveness is checked as a bounded claim: once the scenario's conditions hold (a majority alive, store and allocator reachable), the expected tome or `suspect` must appear within K ticks, with K stated per scenario. A passing run is evidence under those bounds, not a liveness proof. On failure the harness prints the seed and the event trace; `cargo run -p runo-sim -- --seed <n> --scenario <file>` replays it exactly.
+**Simulation scenarios** are the ten failures in the Song spec §10 plus the five contract tests below, each a file in `runo-sim/scenarios/`, plus every TLC counterexample ever found. The harness runs N seeds per scenario and checks S1–S4 after every step. Liveness is checked as a bounded claim: once the scenario's conditions hold (a majority alive, store and allocator reachable), the expected tome or `suspect` must appear within K ticks, with K stated per scenario. A passing run is evidence under those bounds, not a liveness proof. On failure the harness prints the seed and the event trace; `cargo run -p runo-sim -- --seed <n> --scenario <file>` replays it exactly.
 
 | Scenario | Injected | Must hold |
 | --- | --- | --- |
@@ -681,7 +748,7 @@ Each milestone ends in a gate taken from the proof plan; nothing starts the next
 
 | # | Milestone | Delivers | Gate |
 | --- | --- | --- | --- |
-| 0 | Replays 1–3 | `replay.py` over the HODD Bob corpus; the signal-to-human-action baseline; the same replay on a second board with a hand-built delivery layer | **Run 2–3 November 2026. The original gate (detection beats the timeline) was not met and was deliberately replaced**, because the evidence moved the priority from detection to routing: Paperclip flagged 533 lanes to Runo's 289, yet 668 of 778 stall episodes never reached a human. Baselines for "stall signals acted on within one hour": 7% on HODD Bob, 7% on the second board's fleet era, 11% on its two-builder era; an hourly COO agent raised coverage to 43% but not the within-the-hour share. 58% of unanswered suspects cleared on their own within six hours. Cutting seats from 16 to 7 reduced suspects per seat-day from 3.0 to 1.9 (37%) and cancelled runs from 47% to 29% (18 points). See the Runo Replay Report and report 2. |
+| 0 | Replays 1–3 | `replay.py` over the HODD Bob corpus; the signal-to-human-action baseline; the same replay on a second board with a hand-built delivery layer | **Run 2–3 November 2026. The original gate (detection beats the timeline) was not met and was deliberately replaced**, because the evidence moved the priority from detection to routing: Paperclip flagged 533 lanes to Runo's 289, yet 668 of 778 stall episodes never reached a human. Baselines for "stall signals acted on within one hour": 7% on HODD Bob, 7% on the second board's fleet era, 11% on its two-builder era; an hourly COO agent raised coverage to 43% but not the within-the-hour share. 58% of unanswered suspects cleared on their own within six hours. Cutting seats from 16 to 7 reduced suspects per seat-day from 3.0 to 1.9 (37%) and cancelled runs from 47% to 29% (18 points). See the Runo Replay Report ; report 2 (the second board) is not available as a document, so its figures here are unverified. |
 | 1 | Model | `model/Runo.tla`, TLC configs | S1–S4 invariant and L1 live on the small instance; every counterexample becomes a scenario |
 | 2 | Core types and store | `runo-core`, `runo-store` (jsonl, mem) with `Record` envelopes and persisted classes, the store service and client, property tests | Encoding and ingress properties pass; a chain written through the service is readable by `replay.py` |
 | 3 | Triage view (Watch mode, §15) | `runo diagnose` and `runo watch`: the herald as a chorus of one with raw observations and overdue-only suspicions; `runo-clock` escalation with the **wait-one-cadence rule**; durable **episodes**; the ladder with the human `CallChannel`; the view as a short list: one episode per lane and clock, waits shown only when overdue, remaining episodes ranked by usefulness, failures that need a person at the top, reachability shown as *unknown*, **episodes per seat-day** per seat; `runo doctor`; a systemd unit and a container image | Before-and-after on the same board, same script, measured as two separate outcomes: (a) share of failed-run episodes **delivered** to the owner within one hour, and (b) share **acted on** within one hour (baselines 7% / 7% / 11%). False calls under one per lane-day given self-resolution; episodes per day shown after folding; share of `blocked` observations that never became suspicions. A before-and-after shows association; causation is claimed only if the view is switched off and on across comparable weeks |

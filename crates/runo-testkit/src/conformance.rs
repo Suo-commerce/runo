@@ -19,7 +19,9 @@ macro_rules! store_conformance {
     };
 }
 
-/// Run the `FencedResource` conformance suite: persisted, monotonic, never lowered, restart-safe.
+/// Run the `FencedResource` conformance suite: persisted, monotonic, never lowered, restart-safe;
+/// every ack names the resource, the authorizing verse, the fence now enforced and the durability
+/// reached; `Closed` installs through the same path as an epoch.
 #[macro_export]
 macro_rules! fenced_resource_conformance {
     ($name:ident, $make:expr) => {

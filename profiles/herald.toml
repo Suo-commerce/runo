@@ -11,7 +11,7 @@ transitions = [["online", "offline"]]
 [cadence]
 source   = "corpus"
 online   = 15
-escalate = [1.0, 1.5, 2.0]
+escalate = [10, 15, 20]   # tenths: 1x, 1.5x, 2x
 
 [listen]
 to = ["lane"]
