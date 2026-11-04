@@ -223,6 +223,65 @@ impl<J: AllocatorJournal> Allocator<J> {
         Ok(close)
     }
 
+    /// Carry a sealed tome into the song (technical spec §9: the scribe cannot sign). `cause` is
+    /// the `Close` verse. Idempotent: a tome already sung for this `Close` is returned.
+    ///
+    /// # Errors
+    /// `close` is not this task's `Close`, or storage fails.
+    pub async fn tome(
+        &self,
+        task: &TaskId,
+        close: VerseId,
+        manifest: runo_core::Hash,
+        root: runo_core::Hash,
+    ) -> Result<Verse, FenceError> {
+        let _one = self.one_at_a_time.lock().await;
+        let records = self.store.task_records(task).await?;
+        if !records
+            .iter()
+            .any(|r| r.verse.seal.sum == close && matches!(r.verse.payload, Payload::Close { .. }))
+        {
+            return Err(FenceError::Setup("that is not this task's Close".into()));
+        }
+        if let Some(done) = records
+            .into_iter()
+            .map(|r| r.verse)
+            .find(|v| matches!(&v.payload, Payload::Tome { close: c, .. } if *c == close))
+        {
+            return Ok(done);
+        }
+        let payload = Payload::Tome {
+            close,
+            manifest: Ref {
+                scheme: "blob".into(),
+                path: String::new(),
+                hash: manifest,
+            },
+            root,
+        };
+        self.sing(task, payload).await
+    }
+
+    /// Record that `verse` arrived after `tome` was sealed (technical spec §9, addenda). The late
+    /// verse is stored as it arrived; the tome is unchanged. Idempotent.
+    ///
+    /// # Errors
+    /// Storage fails.
+    pub async fn addendum(
+        &self,
+        task: &TaskId,
+        tome: VerseId,
+        verse: VerseId,
+    ) -> Result<Verse, FenceError> {
+        let _one = self.one_at_a_time.lock().await;
+        if let Some(done) = self.store.task_records(task).await?.into_iter().map(|r| r.verse).find(|v| {
+            matches!(&v.payload, Payload::Addendum { tome: t, verse: l } if *t == tome && *l == verse)
+        }) {
+            return Ok(done);
+        }
+        self.sing(task, Payload::Addendum { tome, verse }).await
+    }
+
     /// The closure snapshot at this boundary: every grant, every chain's end among the task's
     /// current records (granted chains with no verses included as empty), and every fork.
     async fn snapshot(
@@ -362,7 +421,10 @@ impl<J: AllocatorJournal> Allocator<J> {
         };
         let verse =
             seal(&self.key, header, payload).map_err(|e| FenceError::Setup(e.to_string()))?;
-        let closed = matches!(verse.payload, Payload::Close { .. });
+        let closed = matches!(
+            verse.payload,
+            Payload::Close { .. } | Payload::Tome { .. } | Payload::Addendum { .. }
+        );
         let stored = if closed {
             self.store.record(&verse, Durability::Host).await
         } else {

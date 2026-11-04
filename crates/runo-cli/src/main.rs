@@ -149,6 +149,15 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         every: u64,
     },
+    /// Recompute a tome from its closure snapshot and compare, byte for byte. Read-only.
+    Verify {
+        /// The Tome verse's id.
+        #[arg(long)]
+        tome: String,
+        /// The store: its Unix socket path, or `tcp:host:port`.
+        #[arg(long)]
+        store: String,
+    },
     /// The allocator's commands (its host only): relaunch a stalled singer under a new epoch, or
     /// close a task.
     Fence {
@@ -657,6 +666,7 @@ fn main() {
             sign,
         } => exit_on(chorus::init(&manifest, &chorus, sign), "init", 4),
         cmd @ (Cmd::Node { .. } | Cmd::Sing { .. } | Cmd::View { .. }) => chorus_run(cmd),
+        Cmd::Verify { tome, store } => exit_on(fence::verify(&store, &tome), "verify", 7),
         Cmd::Fence {
             cmd,
             chorus,

@@ -95,5 +95,61 @@ pub fn close(a: &FenceArgs<'_>, task: &str) -> Result<(), String> {
     println!("closed {task}");
     println!("  snapshot  {}", display(&snapshot.hash));
     println!("  close     {}", display(&close.seal.sum.0));
+    // The scribe seals; the allocator, which authorized closure, carries the tome into the song.
+    let store = rt.block_on(crate::node::connect(a.store))?;
+    let sealed = rt
+        .block_on(runo_scribe::seal(&store, &close))
+        .map_err(|e| format!("closed, but the tome could not be sealed: {e}"))?;
+    rt.block_on(runo_store::VerseWriter::put_blob(&store, &sealed.manifest))
+        .map_err(|e| e.to_string())?;
+    let tome = rt
+        .block_on(al.tome(
+            &TaskId(task.into()),
+            close.seal.sum,
+            sealed.tome.manifest,
+            sealed.tome.root,
+        ))
+        .map_err(|e| format!("sealed, but the tome was not sung: {e}"))?;
+    println!(
+        "  tome      {} ({} verses, root {})",
+        display(&tome.seal.sum.0),
+        sealed.included.len(),
+        display(&sealed.tome.root)
+    );
+    println!(
+        "  check it: runo verify --tome {}",
+        display(&tome.seal.sum.0)
+    );
+    Ok(())
+}
+
+/// `runo verify --tome`: recompute a tome from its snapshot and compare. Anyone can run it.
+pub fn verify(store: &str, tome: &str) -> Result<(), String> {
+    let id = runo_core::hash::parse(tome).ok_or("--tome is a verse id like b3:<64 hex>")?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let client = rt.block_on(crate::node::connect(store))?;
+    let record = rt
+        .block_on(runo_store::VerseReader::get(
+            &client,
+            &runo_core::VerseId(id),
+        ))
+        .map_err(|e| e.to_string())?
+        .ok_or("no such verse in the store")?;
+    let Payload::Tome {
+        close,
+        manifest,
+        root,
+    } = record.verse.payload
+    else {
+        return Err("that verse is not a Tome".into());
+    };
+    let t = runo_scribe::Tome {
+        close,
+        manifest: manifest.hash,
+        root,
+    };
+    rt.block_on(runo_scribe::verify(&client, &t))
+        .map_err(|e| format!("does not verify: {e}"))?;
+    println!("tome {tome} verifies: recomputed from its snapshot, byte for byte");
     Ok(())
 }

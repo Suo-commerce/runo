@@ -454,6 +454,57 @@ pub struct ClosureSnapshot {
     pub forks: Vec<(ChainKey, Vec<VerseId>)>,
 }
 
+/// What a tome says about its task (technical spec §9). Derived from the included verses only;
+/// refrains never count.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Summary {
+    /// How many verses the tome includes.
+    pub verse_count: u64,
+    /// The last `progress` of the highest epoch.
+    pub final_progress: Progress,
+    /// The last `Boundary` event, if any.
+    pub outcome: Option<String>,
+    /// Reported timings: measurements from advisory `sung_at`, not elapsed time.
+    pub timing: Timing,
+}
+
+/// Reported timings from `sung_at`, never clamped.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Timing {
+    /// The first `Claimed` verse's `sung_at`.
+    pub first_claimed: Option<Timestamp>,
+    /// The last included verse's `sung_at`.
+    pub last_sung: Option<Timestamp>,
+    /// Time reported as waiting (between a `blocked_on` boundary and the next boundary without).
+    pub waits: Millis,
+    /// Last minus first minus waits, or why it could not be trusted.
+    pub net: NetTime,
+}
+
+/// A net time, or the reason it is not one.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum NetTime {
+    /// A plausible span.
+    Valid(Millis),
+    /// Negative, beyond the run's wall-clock bounds, or unreadable; the raw values are kept above.
+    Invalid(String),
+}
+
+/// The manifest blob a `Tome` names: CBOR of this (technical spec §3, §9).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TomeManifest {
+    /// The `Close` verse.
+    pub close: VerseId,
+    /// The closure snapshot, copied so the tome describes itself.
+    pub snapshot: ClosureSnapshot,
+    /// What the included verses say.
+    pub summary: Summary,
+}
+
 /// Serde for a 64-byte signature as one CBOR byte string, as verses and refrains carry it.
 pub mod serde_bytes_64 {
     use serde::de::{Error as _, Visitor};

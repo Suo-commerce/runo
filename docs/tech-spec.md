@@ -208,8 +208,11 @@ pub struct ClosureSnapshot {         // written by the allocator at Close; immut
 pub struct TomeManifest {
     pub close: VerseId,
     pub snapshot: ClosureSnapshot,    // copied, so the tome is self-describing
-    pub summary: Summary,             // verse_count, final_progress, outcome, net_time, waits
+    pub summary: Summary,             // verse_count, final_progress, outcome, timing
 }
+pub struct Summary { pub verse_count: u64, pub final_progress: Progress, pub outcome: Option<String>, pub timing: Timing }
+pub struct Timing { pub first_claimed: Option<Timestamp>, pub last_sung: Option<Timestamp>, pub waits: Millis, pub net: NetTime }
+pub enum NetTime { Valid(Millis), Invalid(String) }   // never clamped; the raw times stay in Timing
 ```
 
 **Compatibility.** Canonical encoding is strict: a v3 reader rejects a verse with an unknown field, because an ignored field would still be under the signature and two readers would disagree about what was signed. New fields therefore arrive only with a version bump, and a reader accepts `v` up to its own. `Option` and `#[serde(default)]` are for Later *values* within v3's field set, not for new fields.
@@ -555,9 +558,12 @@ Closure stops work: anything arriving for the task afterwards is `History` at th
 ```rust
 /// Deterministic: same closure verse + same store contents => byte-identical manifest and root.
 /// Reads through ScribeRead (§7): the snapshot a Close names, blobs, a task's records of every class.
-pub fn seal(store: &dyn ScribeRead, closure: &Verse) -> Result<Tome, ScribeError>;
-pub fn verify(store: &dyn ScribeRead, tome: &Tome) -> Result<(), ScribeError>;
+/// Async, like the role traits it reads through; returns the manifest bytes for the runner to store.
+pub async fn seal(store: &dyn ScribeRead, closure: &Verse) -> Result<Sealed, ScribeError>;   // Sealed { tome, manifest, included }
+pub async fn verify(store: &dyn ScribeRead, tome: &Tome) -> Result<(), ScribeError>;
 ```
+
+**As built (4 Nov 2026).** `runo fence close` seals right after `Close` and has the allocator sing the `Tome` (`Allocator::tome`, idempotent per `Close`); `Allocator::addendum` records a late verse. The standing runner that watches for `Close` and late `History` verses is not built yet.
 
 **Closure trigger.** The runner watches `read_since` for `Close` verses from the roster's allocator. For each, it calls `seal`, stores the manifest blob, and asks the allocator's node to sing the `Tome` verse (the scribe cannot sign; the allocator, which authorized closure, carries the tome into the song with `cause` = the `Close` verse). A `Tome` the allocator refuses to sing is a liveness failure of the allocator, visible as L1.
 
@@ -681,7 +687,7 @@ network  = "lan"
 | `runo sing waiting --task HOD-42 --blocked-on human` | Agent playbooks | A `Boundary` with `blocked_on` | Planned, milestone 4 |
 | `runo listen [--voice X] [--overdue]` | Agent playbooks, humans | Latest verse and refrain per voice, four clocks, suspicion, incidents; `--overdue` prints only crossings. v0.1's `listen.py`, made real | Planned, milestone 4 |
 | `runo view` | Owner | The owner's view: one row per voice, four clocks, waits, gray-work signals, incidents, tempo bar; refreshes on the probe interval | Planned, milestone 3 |
-| `runo verify --tome <hash>` | Anyone | Recomputes a tome from its snapshot and reports the first mismatch | Planned, milestone 5 |
+| `runo verify --tome <hash>` | Anyone | Recomputes a tome from its snapshot and reports the first mismatch | Implemented |
 | `runo fence relaunch --singer lane-1 --task HOD-42` | The allocator's host only | The relaunch sequence (§8); refuses without the allocator key | Implemented |
 | `runo fence close --task HOD-42` | The allocator's host only | Closure (§8); resumes from its journal when run again | Implemented |
 | `runo replay --paperclip dir --forgejo dir` | Anyone | The Python replay, ported, so the detectors under test are the shipped ones | Planned, milestone 4 |

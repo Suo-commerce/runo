@@ -1259,10 +1259,14 @@ dependencies = [
 name = "runo-scribe"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "runo-core",
+ "runo-fence",
  "runo-store",
+ "runo-testkit",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
