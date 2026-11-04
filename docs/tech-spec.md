@@ -110,7 +110,7 @@ The human `CallChannel` delivers one message per episode and level: a comment on
 
 Later crates (`runo-store-taso`, `runo-cadence-aegloss`, and the allocator side of `runo-adapter-paperclip`) implement Core traits and sit beside the workspace or in it behind feature flags; nothing in Core imports them. `runo-testkit` is a dev-dependency only and never ships in a binary.
 
-**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest`, because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8). `runo-store` adds `serde_json` for the jsonl backend's human-readable lines (§7), so a song can be read with `grep` and the replay kit. `runo-node` uses the same `serde_json` for its episode state, so what was delivered to a person survives a restart and can be read by hand. The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
+**Dependency policy.** Core crates take only `serde`, `ciborium`, `blake3`, `ed25519-dalek`, `tokio`, `toml`, `clap`, `thiserror`, `tracing`, and `proptest` for tests. The herald adapter adds `reqwest` (rustls with the system's root certificates, so the binary stays static and trusts what its host trusts), because the Paperclip API is the primary integration and JSONL import covers offline diagnosis (decision 8), and `serde_json` to read the board's JSON, tolerating fields it does not use. `runo-store` adds `serde_json` for the jsonl backend's human-readable lines (§7), so a song can be read with `grep` and the replay kit. `runo-node` uses the same `serde_json` for its episode state, so what was delivered to a person survives a restart and can be read by hand. The runtime-stage simulator crate is not yet chosen (decision 9). Anything else needs a line in this table saying why.
 
 ## 3. Data model
 
@@ -288,7 +288,11 @@ pub enum Observation<'a> {
     Verse(&'a Verse),                     // reachability; progress if height/head advanced; task on Claimed
     Vouch { about: &'a About, from: &'a SingerId },
     SuspectHeard { about: &'a About, clock: Clock, from: &'a SingerId },
+    Inferred { singer: &'a SingerId, task: &'a TaskId, what: Evidence<'a> }, // Watch mode only
 }
+// What a board can show about a lane, fed to the same rules as the lane's own verses (§15):
+// never a verse in the lane's name, never proof of reachability.
+pub enum Evidence<'a> { Started(&'a Promise), Progressed(u64), Blocked(&'a str), Unblocked, Ended }
 
 pub struct PeerClocks {
     reach_since: Instant, progress_since: Instant,

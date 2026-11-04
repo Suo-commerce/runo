@@ -10,6 +10,8 @@ wildcards = "deny"
 skip = [
   { crate = "cpufeatures:0.2", reason = "curve25519-dalek (via ed25519-dalek) is still on 0.2; blake3 is on 0.3" },
   { crate = "syn:2", reason = "serde_derive, thiserror and clap_derive are on syn 2; async-trait moved to syn 3" },
+  { crate = "base64:0.22", reason = "reqwest 0.12 is on base64 0.22 while its own hyper-util is on 0.23" },
+  { crate = "windows-sys:0.52", reason = "ring (rustls, via reqwest) is still on 0.52; Windows-only, never built for a Linux herald" },
 ]
 
 [licenses]
