@@ -111,6 +111,9 @@ pub enum Signal {
         overdue_by: Millis,
         /// One line on why, in board terms.
         reason: String,
+        /// When the stall began: the same for every level of one stall, and on every replay of
+        /// the same history, so it identifies the episode.
+        since: Instant,
         /// Board time.
         at: Instant,
     },
@@ -129,9 +132,11 @@ pub enum Signal {
 
 #[derive(Default)]
 struct Seen {
+    name: Option<String>,
     lane: Option<Lane>,
     mark: u64,
-    failed: bool,
+    /// The lane a never-clearing failure was raised on, until the issue ends or advances.
+    failed: Option<Lane>,
 }
 
 /// The herald: a chorus of one over a board.
@@ -157,6 +162,13 @@ impl Herald {
             issues: BTreeMap::new(),
             voice,
         }
+    }
+
+    /// Learn an issue's display name ahead of its events: on a first start an issue's snapshot is
+    /// dated at its last update, later than the runs replayed before it, and a failure on it must
+    /// still be named and cleared by the issue.
+    pub fn learn(&mut self, id: &str, name: &str) {
+        self.issues.entry(id.to_owned()).or_default().name = Some(name.to_owned());
     }
 
     /// Read one board event. Events must arrive in board-time order.
@@ -193,9 +205,9 @@ impl Herald {
                         .or_default();
                     seen.mark += 1;
                     let mark = seen.mark;
-                    if std::mem::take(&mut seen.failed) {
+                    if let Some(failed) = seen.failed.take() {
                         out.push(Signal::Cleared {
-                            lane: lane.clone(),
+                            lane: failed,
                             clock: Clock::Task,
                             why: Cleared::Evidence,
                             at: *at,
@@ -207,12 +219,18 @@ impl Herald {
                     .as_deref()
                     .filter(|c| self.config.never_clears.contains(*c))
                 {
+                    let name = issue.as_ref().map(|i| {
+                        self.issues
+                            .get(i)
+                            .and_then(|s| s.name.clone())
+                            .unwrap_or_else(|| i.clone())
+                    });
                     let lane = lane.unwrap_or_else(|| Lane {
                         singer: SingerId(agent.clone()),
-                        task: TaskId(issue.clone().unwrap_or_else(|| "no issue".into())),
+                        task: TaskId(name.unwrap_or_else(|| "no issue".into())),
                     });
-                    if let Some(seen) = issue.as_ref().and_then(|i| self.issues.get_mut(i)) {
-                        seen.failed = true;
+                    if let Some(i) = issue {
+                        self.issues.entry(i.clone()).or_default().failed = Some(lane.clone());
                     }
                     let why = reason
                         .as_deref()
@@ -225,6 +243,7 @@ impl Herald {
                         reason: format!(
                             "run {id} failed with {code}, which Paperclip does not retry{why}"
                         ),
+                        since: *at,
                         at: *at,
                     });
                 }
@@ -247,14 +266,23 @@ impl Herald {
                     .find(|r| r.peer == e.peer && r.task == task)
                     .and_then(|r| r.blocked_on.clone());
                 let reason = match e.clock {
-                    Clock::Waiting => format!(
-                        "waiting on {} for longer than the waiting threshold",
-                        blocked_on.as_deref().unwrap_or("something")
-                    ),
+                    Clock::Waiting => match blocked_on.as_deref() {
+                        Some("review") => "in review for longer than the waiting threshold".into(),
+                        Some(b) => format!("{b} for longer than the waiting threshold"),
+                        None => "waiting for longer than the waiting threshold".into(),
+                    },
                     Clock::Progress => "no run has advanced it since the last progress".into(),
                     Clock::Task => "in progress for longer than the advisory promise".into(),
                     Clock::Reachability => "not heard from".into(),
                 };
+                let cadence = if e.clock == Clock::Waiting {
+                    self.config.waiting
+                } else {
+                    self.config.promise.cadence
+                };
+                let behind = runo_clock::escalate::threshold_of(&cadence, e.level)
+                    .0
+                    .saturating_add(e.overdue_by.0);
                 out.push(Signal::Raised {
                     lane: Lane {
                         singer: e.peer,
@@ -264,6 +292,7 @@ impl Herald {
                     level: e.level,
                     overdue_by: e.overdue_by,
                     reason,
+                    since: Instant(now.0.saturating_sub(behind.saturating_mul(1_000_000))),
                     at: now,
                 });
             }
@@ -293,18 +322,18 @@ impl Herald {
             task: TaskId(name.to_owned()),
         });
         let seen = self.issues.entry(id.to_owned()).or_default();
+        seen.name = Some(name.to_owned());
+        if !active && let Some(failed) = seen.failed.take() {
+            out.push(Signal::Cleared {
+                lane: failed,
+                clock: Clock::Task,
+                why: Cleared::Completed,
+                at,
+            });
+        }
         let old = seen.lane.clone();
         if let Some(old) = old.filter(|o| !active || lane.as_ref() != Some(o)) {
-            let seen = self.issues.entry(id.to_owned()).or_default();
-            seen.lane = None;
-            if std::mem::take(&mut seen.failed) {
-                out.push(Signal::Cleared {
-                    lane: old.clone(),
-                    clock: Clock::Task,
-                    why: Cleared::Completed,
-                    at,
-                });
-            }
+            self.issues.entry(id.to_owned()).or_default().lane = None;
             self.infer(at, &old, Evidence::Ended);
         }
         let Some(lane) = lane.filter(|_| active) else {

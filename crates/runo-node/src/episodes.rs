@@ -55,6 +55,12 @@ pub struct Episode {
     pub delivered: Option<Level>,
     /// When and why it resolved; `None` while open.
     pub resolved: Option<(Timestamp, Cleared)>,
+    /// One line on why, in the source's terms; updated when the episode is raised.
+    #[serde(default)]
+    pub reason: String,
+    /// Resolved before this voice started listening, so recorded as history and never sent.
+    #[serde(default)]
+    pub settled: bool,
 }
 
 impl Episode {
@@ -91,6 +97,8 @@ pub struct Notice {
     pub level: Level,
     /// Set when the episode already resolved before this notice went out.
     pub resolved: Option<Cleared>,
+    /// The episode's reason at this level.
+    pub reason: String,
 }
 
 impl Notice {
@@ -134,8 +142,10 @@ impl Episodes {
             .find(|e| e.is_open() && e.id.lane == *lane && e.id.clock == clock)
     }
 
-    /// The ladder sang `suspect` for `lane` and `clock` at `level`. Opens an episode if none is
-    /// open for them, raises the open one if `level` is higher, and otherwise changes nothing.
+    /// The ladder sang `suspect` for `lane` and `clock` at `level`. An episode with that identity
+    /// already recorded, open or resolved, is the same episode: replaying history after a restart
+    /// never reopens one. Otherwise this opens an episode if none is open for the lane and clock,
+    /// raises the open one if `level` is higher, and changes nothing else.
     pub fn escalated(
         &mut self,
         lane: &Lane,
@@ -143,24 +153,41 @@ impl Episodes {
         level: Level,
         suspect: VerseId,
         at: &Timestamp,
+        reason: &str,
     ) -> Change {
-        if let Some(e) = self.open_mut(lane, clock) {
+        let id = EpisodeId {
+            lane: lane.clone(),
+            clock,
+            opening: suspect,
+        };
+        let known = self.episodes.iter().position(|e| e.id == id);
+        let open = known.filter(|i| self.episodes[*i].is_open()).or_else(|| {
+            known.is_none().then(|| {
+                self.episodes
+                    .iter()
+                    .position(|e| e.is_open() && e.id.lane == *lane && e.id.clock == clock)
+            })?
+        });
+        if known.is_some() && open.is_none() {
+            return Change::Unchanged;
+        }
+        if let Some(i) = open {
+            let e = &mut self.episodes[i];
             if level > e.level {
                 e.level = level;
+                reason.clone_into(&mut e.reason);
                 return Change::Raised;
             }
             return Change::Unchanged;
         }
         self.episodes.push(Episode {
-            id: EpisodeId {
-                lane: lane.clone(),
-                clock,
-                opening: suspect,
-            },
+            id,
             opened_at: at.clone(),
             level,
             delivered: None,
             resolved: None,
+            reason: reason.to_owned(),
+            settled: false,
         });
         Change::Opened
     }
@@ -184,8 +211,27 @@ impl Episodes {
                 id: e.id.clone(),
                 level: e.level,
                 resolved: e.resolved.as_ref().map(|(_, why)| *why),
+                reason: e.reason.clone(),
             })
             .collect()
+    }
+
+    /// Record every resolved episode still owed a notice as history, without sending it: what a
+    /// voice does once after its first catch-up, so a first start does not flood a person with
+    /// stalls that ended before anyone was listening (Jarmo, 4 Nov 2026). Open episodes stay
+    /// owed. Returns how many were settled.
+    pub fn settle_resolved(&mut self) -> usize {
+        let mut n = 0;
+        for e in self
+            .episodes
+            .iter_mut()
+            .filter(|e| !e.is_open() && e.owes())
+        {
+            e.delivered = Some(e.level);
+            e.settled = true;
+            n += 1;
+        }
+        n
     }
 
     /// A notice was delivered. Idempotent; a lower level than already recorded changes nothing.
@@ -288,12 +334,12 @@ mod tests {
         let mut e = Episodes::default();
         let t = ts("10:00");
         assert_eq!(
-            e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &t),
+            e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &t, "stalled"),
             Change::Opened
         );
         assert_eq!(deliver_all(&mut e).len(), 1);
         assert_eq!(
-            e.escalated(&lane(), Clock::Progress, Level::Called, v(2), &t),
+            e.escalated(&lane(), Clock::Progress, Level::Called, v(2), &t, "stalled"),
             Change::Unchanged
         );
         assert!(
@@ -301,7 +347,14 @@ mod tests {
             "no level above the delivered one, nothing owed"
         );
         assert_eq!(
-            e.escalated(&lane(), Clock::Progress, Level::Suspected, v(3), &t),
+            e.escalated(
+                &lane(),
+                Clock::Progress,
+                Level::Suspected,
+                v(3),
+                &t,
+                "stalled"
+            ),
             Change::Raised
         );
         let sent = deliver_all(&mut e);
@@ -314,7 +367,7 @@ mod tests {
         assert_eq!(sent[0].level, Level::Suspected);
         // Another clock on the same lane is its own episode.
         assert_eq!(
-            e.escalated(&lane(), Clock::Waiting, Level::Called, v(4), &t),
+            e.escalated(&lane(), Clock::Waiting, Level::Called, v(4), &t, "stalled"),
             Change::Opened
         );
         assert_eq!(e.open().count(), 2);
@@ -323,12 +376,26 @@ mod tests {
     #[test]
     fn a_later_crossing_after_resolution_is_a_new_episode() {
         let mut e = Episodes::default();
-        e.escalated(&lane(), Clock::Task, Level::Called, v(1), &ts("10:00"));
+        e.escalated(
+            &lane(),
+            Clock::Task,
+            Level::Called,
+            v(1),
+            &ts("10:00"),
+            "stalled",
+        );
         deliver_all(&mut e);
         assert!(e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("10:30")));
         assert!(!e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("10:31")));
         assert_eq!(
-            e.escalated(&lane(), Clock::Task, Level::Called, v(9), &ts("12:00")),
+            e.escalated(
+                &lane(),
+                Clock::Task,
+                Level::Called,
+                v(9),
+                &ts("12:00"),
+                "stalled"
+            ),
             Change::Opened
         );
         let sent = deliver_all(&mut e);
@@ -340,7 +407,14 @@ mod tests {
     #[test]
     fn a_stall_that_clears_before_delivery_is_still_delivered_saying_so() {
         let mut e = Episodes::default();
-        e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &ts("10:00"));
+        e.escalated(
+            &lane(),
+            Clock::Progress,
+            Level::Called,
+            v(1),
+            &ts("10:00"),
+            "stalled",
+        );
         e.resolved(&lane(), Clock::Progress, Cleared::Evidence, &ts("10:05"));
         e.prune(0);
         let sent = deliver_all(&mut e);
@@ -352,13 +426,21 @@ mod tests {
     #[test]
     fn levels_passed_while_undelivered_fold_into_one_notice() {
         let mut e = Episodes::default();
-        e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &ts("10:00"));
+        e.escalated(
+            &lane(),
+            Clock::Progress,
+            Level::Called,
+            v(1),
+            &ts("10:00"),
+            "stalled",
+        );
         e.escalated(
             &lane(),
             Clock::Progress,
             Level::CalledAgain,
             v(2),
             &ts("10:15"),
+            "stalled",
         );
         e.escalated(
             &lane(),
@@ -366,6 +448,7 @@ mod tests {
             Level::Suspected,
             v(3),
             &ts("10:30"),
+            "stalled",
         );
         let sent = deliver_all(&mut e);
         assert_eq!(sent.len(), 1);
@@ -381,8 +464,22 @@ mod tests {
         assert_eq!(Episodes::load(&path).unwrap(), Episodes::default());
 
         let mut e = Episodes::default();
-        e.escalated(&lane(), Clock::Progress, Level::Called, v(1), &ts("10:00"));
-        e.escalated(&lane(), Clock::Waiting, Level::Called, v(2), &ts("10:00"));
+        e.escalated(
+            &lane(),
+            Clock::Progress,
+            Level::Called,
+            v(1),
+            &ts("10:00"),
+            "stalled",
+        );
+        e.escalated(
+            &lane(),
+            Clock::Waiting,
+            Level::Called,
+            v(2),
+            &ts("10:00"),
+            "stalled",
+        );
         let owed = e.pending();
         e.delivered(&owed[0]);
         e.save(&path).unwrap();
@@ -411,13 +508,80 @@ mod tests {
     fn prune_keeps_open_episodes_and_the_newest_resolved() {
         let mut e = Episodes::default();
         for n in 0..4 {
-            e.escalated(&lane(), Clock::Task, Level::Called, v(n), &ts("t"));
+            e.escalated(
+                &lane(),
+                Clock::Task,
+                Level::Called,
+                v(n),
+                &ts("t"),
+                "stalled",
+            );
             deliver_all(&mut e);
             e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("t"));
         }
-        e.escalated(&lane(), Clock::Task, Level::Called, v(9), &ts("t"));
+        e.escalated(
+            &lane(),
+            Clock::Task,
+            Level::Called,
+            v(9),
+            &ts("t"),
+            "stalled",
+        );
         e.prune(1);
         let kept: Vec<_> = e.all().iter().map(|x| x.id.opening).collect();
         assert_eq!(kept, [v(3), v(9)]);
+    }
+
+    #[test]
+    fn a_replayed_crossing_is_the_episode_already_recorded() {
+        let mut e = Episodes::default();
+        let t = ts("10:00");
+        e.escalated(&lane(), Clock::Task, Level::Called, v(1), &t, "stalled");
+        e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("10:30"));
+        assert_eq!(
+            e.escalated(&lane(), Clock::Task, Level::Called, v(1), &t, "stalled"),
+            Change::Unchanged,
+            "the same identity, replayed after a restart, is not a new stall"
+        );
+        assert_eq!(e.all().len(), 1);
+        assert_eq!(
+            e.escalated(
+                &lane(),
+                Clock::Task,
+                Level::Called,
+                v(2),
+                &ts("11:00"),
+                "again"
+            ),
+            Change::Opened,
+            "a different crossing is"
+        );
+    }
+
+    #[test]
+    fn a_first_start_settles_history_and_still_owes_what_is_open() {
+        let mut e = Episodes::default();
+        e.escalated(
+            &lane(),
+            Clock::Task,
+            Level::Called,
+            v(1),
+            &ts("09:00"),
+            "old",
+        );
+        e.resolved(&lane(), Clock::Task, Cleared::Completed, &ts("09:30"));
+        e.escalated(
+            &lane(),
+            Clock::Waiting,
+            Level::Called,
+            v(2),
+            &ts("09:40"),
+            "waiting on review",
+        );
+        assert_eq!(e.settle_resolved(), 1);
+        let owed = e.pending();
+        assert_eq!(owed.len(), 1);
+        assert_eq!(owed[0].reason, "waiting on review");
+        assert!(e.all()[0].settled && !e.all()[1].settled);
     }
 }

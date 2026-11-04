@@ -75,7 +75,13 @@ fn a_blocked_issue_is_a_wait_and_is_said_only_when_overdue() {
     assert!(h.tick(at(119)).is_empty(), "still inside that cadence");
     let s = h.tick(at(120));
     assert_eq!(raised(&s), [(Clock::Waiting, Level::Called)]);
-    let Signal::Raised { lane, reason, .. } = &s[0] else {
+    let Signal::Raised {
+        lane,
+        reason,
+        since,
+        ..
+    } = &s[0]
+    else {
         unreachable!()
     };
     assert_eq!(
@@ -83,6 +89,12 @@ fn a_blocked_issue_is_a_wait_and_is_said_only_when_overdue() {
         ("builder", "HOD-43")
     );
     assert!(reason.contains("blocked on the board"), "{reason}");
+    assert_eq!(*since, at(0), "the stall began when the block did");
+    let again = h.tick(at(150));
+    assert!(
+        matches!(again.as_slice(), [Signal::Raised { level: Level::CalledAgain, since: s, .. }] if *s == at(0)),
+        "a higher level of the same stall names the same start: {again:?}"
+    );
 
     let s = h.ingest(&issue("in_progress", "builder", 130));
     assert!(

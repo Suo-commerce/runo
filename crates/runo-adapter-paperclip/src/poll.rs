@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use runo_core::time::Instant;
 
-use crate::board::{BoardEvent, Issue, Run};
+use crate::board::{Agent, BoardEvent, Issue, Run};
 use crate::time;
 
 /// The largest page either list serves (Paperclip `f7ad1dc`: issues and runs, 1000).
@@ -102,6 +102,15 @@ impl Paperclip {
             self.company, self.page
         );
         self.get(&path).await
+    }
+
+    /// The company's agents, for names in the view. The route takes no parameters.
+    ///
+    /// # Errors
+    /// See [`PollError`].
+    pub async fn agents(&self) -> Result<Vec<Agent>, PollError> {
+        self.get(&format!("/api/companies/{}/agents", self.company))
+            .await
     }
 
     /// The server's version, from `GET /api/health`, for `runo doctor`.

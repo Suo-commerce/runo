@@ -51,6 +51,16 @@ pub struct Run {
     pub created_at: Option<String>,
 }
 
+/// An agent as `GET /api/companies/:id/agents` returns it: only its name is used, for the view.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Agent {
+    /// Board id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+}
+
 /// One board record, normalized, at the board time it happened.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BoardEvent {
