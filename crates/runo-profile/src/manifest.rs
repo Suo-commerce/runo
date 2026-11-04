@@ -251,6 +251,8 @@ mod tests {
     }
 
     fn enrolments(m: &super::Manifest) -> Vec<Enrolment> {
+        // A fresh random salt, as `runo enroll` makes one: never a constant, even in a test.
+        let salt = runo_core::sign::generate().to_bytes();
         m.voices
             .iter()
             .enumerate()
@@ -258,7 +260,7 @@ mod tests {
                 Enrolment::new(
                     &v.singer,
                     [u8::try_from(i).unwrap(); 32],
-                    &[7; 32],
+                    &salt,
                     &v.credential,
                 )
             })
