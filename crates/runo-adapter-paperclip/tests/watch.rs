@@ -71,7 +71,7 @@ fn a_first_start_sends_what_is_stuck_now_and_keeps_history_quiet() {
     assert_eq!(out.len(), 1, "only HOD-2 is stuck now: {out:?}");
     assert_eq!(
         out[0].text,
-        "HOD-2 · Bob · waiting needs a person: blocked on the board for longer than the waiting threshold\n  https://bob.example/issues/HOD-2"
+        "HOD-2 · Bob · waiting needs a person: blocked on the board, past the waiting threshold\n  https://bob.example/issues/HOD-2"
     );
     let view = w.view(at(300));
     assert!(view.contains("Open (1), worst first"), "{view}");
@@ -208,6 +208,88 @@ fn links_open_the_boards_own_page_under_the_company_prefix() {
             .ends_with("\n  https://bob.example/HOD/issues/HOD-2"),
         "{}",
         out[0].text
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// A blocked issue shaped like HODD Bob's (4 Nov): Paperclip's computed blocker fields decide.
+fn blocked(id: &str, name: &str, state: &str, owner: &str, since: u64, updated: u64) -> String {
+    format!(
+        r#"{{"id":"{id}","identifier":"{name}","status":"blocked","assigneeAgentId":"ag-1",
+            "updatedAt":"{}","blockedTransitionAt":"{}",
+            "blockerAttention":{{"state":"{state}","reason":"active_child","stalledBlockerCount":0,
+              "blockingTreeLive":true,"sampleStalledBlockerIdentifier":null,"sampleBlockerIdentifier":"HOD-7"}},
+            "unblockDescriptor":{owner}}}"#,
+        stamp(updated),
+        stamp(since)
+    )
+}
+
+#[test]
+fn a_block_behind_moving_work_is_parked_and_a_stuck_one_is_timed_from_when_it_began() {
+    let d = dir("blockers");
+    let mut w = open(&d);
+    let issues = page(&[
+        blocked("i1", "HOD-1", "covered", "null", 0, 0),
+        blocked("i2", "HOD-2", "needs_attention", "null", 0, 170),
+        blocked(
+            "i3",
+            "HOD-3",
+            "needs_attention",
+            r#"{"owner":{"agentId":"ag-9"},"action":"Rebase on main and rerun CI\nthen tell Bob"}"#,
+            0,
+            170,
+        ),
+    ]);
+    let out = w.step(&issues, &[], &[], 10, at(180)).unwrap();
+    let texts: Vec<&str> = out.iter().map(|o| o.text.as_str()).collect();
+    assert_eq!(
+        texts.len(),
+        2,
+        "HOD-1 waits on moving work and is never a message: {texts:?}"
+    );
+    assert!(
+        texts[0].starts_with("HOD-2 · Bob · waiting needs a person: blocked and needs attention; nobody is named to unblock it (blocker HOD-7), past the waiting threshold"),
+        "timed from blockedTransitionAt, not the later update: {texts:?}"
+    );
+    assert!(
+        texts[1].starts_with("HOD-3 · Bob · waiting needs a person: blocked; an agent is named to unblock it: Rebase on main and rerun CI (blocker HOD-7)"),
+        "{texts:?}"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_parked_block_that_stalls_without_an_update_is_seen() {
+    let d = dir("stalls");
+    let mut w = open(&d);
+    let covered = page(&[blocked("i1", "HOD-1", "covered", "null", 0, 0)]);
+    assert_eq!(w.step(&covered, &[], &[], 10, at(10)).unwrap(), []);
+    // Same updatedAt; Paperclip now computes the chain as needing attention.
+    let stalled = page(&[blocked("i1", "HOD-1", "needs_attention", "null", 0, 0)]);
+    let out = w.step(&stalled, &[], &[], 10, at(200)).unwrap();
+    assert_eq!(out.len(), 1, "{out:?}");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn the_view_fits_one_screen() {
+    let d = dir("fold");
+    let mut w = open(&d);
+    let rows: Vec<String> = (0..30)
+        .map(|n| issue(&format!("i{n}"), &format!("HOD-{n}"), "blocked", 0))
+        .collect();
+    let out = w.step(&page(&rows), &[], &[], 100, at(200)).unwrap();
+    assert_eq!(out.len(), 30, "each lane is still its own message");
+    let view = w.view(at(200));
+    assert!(view.contains("Open (30)"), "{view}");
+    assert!(view.contains("  … and 5 more: 5 waiting"), "{view}");
+    assert_eq!(
+        view.lines()
+            .filter(|l| l.starts_with("  needs a person"))
+            .count(),
+        25,
+        "{view}"
     );
     std::fs::remove_dir_all(&d).unwrap();
 }

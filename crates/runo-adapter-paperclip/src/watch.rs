@@ -32,6 +32,10 @@ use crate::time;
 /// view and the measures, small enough for a nearly full disk (HODD Bob was at 95% on 3 Nov).
 pub const KEEP_RESOLVED: usize = 500;
 
+/// Open episodes the view lists before folding the rest into a count: the view fits one screen
+/// (technical spec §15).
+pub const VIEW_ROWS: usize = 25;
+
 /// A message owed to a person.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Outgoing {
@@ -235,7 +239,7 @@ impl Watch {
         if open.is_empty() {
             let _ = writeln!(v, "  nothing overdue");
         }
-        for e in &open {
+        for e in open.iter().take(VIEW_ROWS) {
             let age = time::parse(&e.opened_at.0)
                 .map_or(String::new(), |t| span(now.0.saturating_sub(t.0)));
             let _ = writeln!(
@@ -248,6 +252,14 @@ impl Watch {
                 age,
                 e.reason
             );
+        }
+        if let Some(rest) = open.get(VIEW_ROWS..).filter(|r| !r.is_empty()) {
+            let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+            for e in rest {
+                *kinds.entry(clock_word(e.id.clock)).or_default() += 1;
+            }
+            let kinds: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
+            let _ = writeln!(v, "  … and {} more: {}", rest.len(), kinds.join(", "));
         }
         let resolved = self.episodes.all().iter().filter(|e| !e.is_open()).count();
         let _ = writeln!(

@@ -7,7 +7,8 @@
 //! | Board | Evidence for the lane's clocks |
 //! | --- | --- |
 //! | Issue enters `in_progress`, `blocked` or `in_review` with an agent | `Started` under the advisory promise |
-//! | `blocked` | `Blocked("blocked on the board")`: a wait, escalated only when overdue, never on sight |
+//! | `blocked` behind moving work (`blockerAttention.state = covered`) | parked: no lane, never a message; the blocker's own lane is watched |
+//! | any other `blocked` | `Blocked(<who must unblock it, the blocker>)` from `blockedTransitionAt`: a wait, escalated only when overdue, never on sight |
 //! | `in_review` | `Blocked("review")`: the lane waits on a reviewer |
 //! | Back to `in_progress` | `Unblocked` |
 //! | `done`, `cancelled`, `todo`, `backlog`, or reassigned | `Ended` (a reassignment starts the new agent's lane) |
@@ -29,7 +30,7 @@ use runo_core::time::Instant;
 use runo_core::{Cadence, Clock, Millis, Promise, SingerId, TaskId};
 use runo_node::episodes::Lane;
 
-use crate::board::BoardEvent;
+use crate::board::{Block, BoardEvent};
 
 const MINUTE: u64 = 60_000;
 
@@ -198,8 +199,17 @@ impl Herald {
                 name,
                 status,
                 agent,
+                block,
                 at,
-            } => self.issue(id, name, status, agent.as_deref(), *at, &mut out),
+            } => self.issue(
+                id,
+                name,
+                status,
+                agent.as_deref(),
+                block.as_ref(),
+                *at,
+                &mut out,
+            ),
             BoardEvent::RunFinished {
                 id,
                 agent,
@@ -285,8 +295,8 @@ impl Herald {
                     .and_then(|r| r.blocked_on.clone());
                 let reason = match e.clock {
                     Clock::Waiting => match blocked_on.as_deref() {
-                        Some("review") => "in review for longer than the waiting threshold".into(),
-                        Some(b) => format!("{b} for longer than the waiting threshold"),
+                        Some("review") => "in review, past the waiting threshold".into(),
+                        Some(b) => format!("{b}, past the waiting threshold"),
                         None => "waiting for longer than the waiting threshold".into(),
                     },
                     Clock::Progress => "no run has advanced it since the last progress".into(),
@@ -325,16 +335,28 @@ impl Herald {
         &self.chorus
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one board event's fields, destructured once in `ingest`"
+    )]
     fn issue(
         &mut self,
         id: &str,
         name: &str,
         status: &str,
         agent: Option<&str>,
+        block: Option<&Block>,
         at: Instant,
         out: &mut Vec<Signal>,
     ) {
-        let active = matches!(status, "in_progress" | "blocked" | "in_review");
+        // A block behind moving work is parked: not this lane's stall.
+        let parked = block == Some(&Block::Parked);
+        let active = matches!(status, "in_progress" | "blocked" | "in_review") && !parked;
+        // A wait is timed from when it began, not from when the board was read.
+        let at = match block {
+            Some(Block::Waits { since, .. }) => (*since).min(at),
+            _ => at,
+        };
         let lane = agent.map(|a| Lane {
             singer: SingerId(a.to_owned()),
             task: TaskId(name.to_owned()),
@@ -364,9 +386,10 @@ impl Herald {
                 seen.lane = Some(lane.clone());
             }
         }
-        let what = match status {
-            "blocked" => Evidence::Blocked("blocked on the board"),
-            "in_review" => Evidence::Blocked("review"),
+        let what = match (status, block) {
+            ("blocked", Some(Block::Waits { on, .. })) => Evidence::Blocked(on),
+            ("blocked", _) => Evidence::Blocked("blocked on the board"),
+            ("in_review", _) => Evidence::Blocked("review"),
             _ => Evidence::Unblocked,
         };
         self.infer(at, &lane, what);

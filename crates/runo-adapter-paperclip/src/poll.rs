@@ -3,7 +3,8 @@
 //! [`Paperclip`] fetches the two lists the herald needs, newest first, one page each. Neither list
 //! takes a `since`, so [`Feed`] turns successive pages into new [`BoardEvent`]s:
 //!
-//! - an issue is an event whenever its `updatedAt` differs from the last page;
+//! - an issue is an event whenever its `updatedAt`, or the blocker state Paperclip computes when
+//!   read, differs from the last page;
 //! - a run is an event once, when it is first seen finished;
 //! - a **gap** is reported when a full page does not reach back to the newest row of the previous
 //!   page: rows were missed. The herald says so (`paperclip-gap`) rather than hiding it, because
@@ -237,10 +238,11 @@ impl Feed {
             if seen.contains_key(&i.id) {
                 continue;
             }
-            if self.issues.get(&i.id) != Some(&i.updated_at) {
+            let print = i.fingerprint();
+            if self.issues.get(&i.id) != Some(&print) {
                 events.extend(i.event());
             }
-            seen.insert(i.id.clone(), i.updated_at.clone());
+            seen.insert(i.id.clone(), print);
         }
         self.issues = seen;
 
