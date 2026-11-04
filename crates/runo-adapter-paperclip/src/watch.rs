@@ -91,7 +91,8 @@ impl Watch {
             .collect();
     }
 
-    /// Take one fresh page of each list (fetched with page size `page`) at wall time `now`, and
+    /// Take one fresh page of each list (fetched with page size `page`), plus every open issue,
+    /// at wall time `now`, and
     /// return the messages owed, oldest stall first.
     ///
     /// # Errors
@@ -99,15 +100,16 @@ impl Watch {
     pub fn step(
         &mut self,
         issues: &[Issue],
+        open: &[Issue],
         runs: &[Run],
         page: usize,
         now: Instant,
     ) -> Result<Vec<Outgoing>, EpisodeError> {
-        for i in issues {
+        for i in issues.iter().chain(open) {
             self.herald
                 .learn(&i.id, i.identifier.as_deref().unwrap_or(&i.id));
         }
-        let (events, gaps) = self.feed.take(issues, runs, page);
+        let (events, gaps) = self.feed.take(issues, open, runs, page);
         self.gaps.extend(gaps);
         for ev in &events {
             let ticked = self.herald.tick(ev.at());

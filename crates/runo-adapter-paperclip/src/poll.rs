@@ -92,6 +92,19 @@ impl Paperclip {
         self.get(&path).await
     }
 
+    /// Every open issue (in progress, blocked or in review), however long ago it last changed:
+    /// a board larger than one page can hold its longest stalls outside the newest page.
+    ///
+    /// # Errors
+    /// See [`PollError`].
+    pub async fn open_issues(&self) -> Result<Vec<Issue>, PollError> {
+        let path = format!(
+            "/api/companies/{}/issues?status=in_progress,blocked,in_review&sortField=updated&sortDir=desc&limit={MAX_PAGE}",
+            self.company
+        );
+        self.get(&path).await
+    }
+
     /// Heartbeat runs, newest first.
     ///
     /// # Errors
@@ -198,11 +211,13 @@ pub struct Feed {
 }
 
 impl Feed {
-    /// The new events in these pages, in board-time order, and any gap. `page` is the page size
-    /// the lists were fetched with.
+    /// The new events in these pages, in board-time order, and any gap. `issues` is the newest
+    /// page by update, `open` every open issue; an issue in both is read once. `page` is the
+    /// page size the lists were fetched with; the gap check uses the newest page only.
     pub fn take(
         &mut self,
         issues: &[Issue],
+        open: &[Issue],
         runs: &[Run],
         page: usize,
     ) -> (Vec<BoardEvent>, Vec<Gap>) {
@@ -218,7 +233,10 @@ impl Feed {
         }
         self.newest_issue = stamps.iter().copied().max().or(self.newest_issue);
         let mut seen = BTreeMap::new();
-        for i in issues {
+        for i in issues.iter().chain(open) {
+            if seen.contains_key(&i.id) {
+                continue;
+            }
             if self.issues.get(&i.id) != Some(&i.updated_at) {
                 events.extend(i.event());
             }

@@ -88,7 +88,9 @@ impl HeraldConfig {
     pub fn with_minutes(lane: u64, waiting: u64) -> Self {
         let mut c = Self::default();
         c.promise.cadence = ladder(lane.max(1));
-        c.promise.source = "watch, set on the command line".into();
+        if lane != 60 {
+            c.promise.source = format!("watch, --lane-minutes {lane}");
+        }
         c.waiting = ladder(waiting.max(1));
         c
     }
