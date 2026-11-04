@@ -1,5 +1,7 @@
 //! The `runo` binary (technical spec §11, §15). Three tiers: diagnose, watch, chorus.
 
+mod chorus;
+
 use clap::{Parser, Subcommand};
 
 /// Runo: the Dwarven Song.
@@ -40,16 +42,28 @@ enum Cmd {
         #[command(flatten)]
         board: Board,
     },
-    /// Tier 3: write the genesis roster from a chorus manifest.
+    /// Tier 3, once by the owner: check chorus.toml and make roster v1 from the enrolments.
     Init {
         /// Path to chorus.toml.
-        manifest: String,
+        manifest: std::path::PathBuf,
+        /// The chorus directory (public files, shared by every host).
+        #[arg(long)]
+        chorus: std::path::PathBuf,
+        /// Sign roster v1 with the owner's key from this host's key home.
+        #[arg(long)]
+        sign: bool,
     },
-    /// Tier 3: generate this voice's key and submit its roster entry.
+    /// Tier 3, on each host: make this voice's key and write its enrolment.
     Enroll {
-        /// Singer id.
+        /// Singer id, as in chorus.toml.
         #[arg(long)]
         singer: String,
+        /// The chorus directory.
+        #[arg(long)]
+        chorus: std::path::PathBuf,
+        /// The credential reference to fingerprint [default: `file://keys/<singer>.key`].
+        #[arg(long)]
+        credential: Option<String>,
     },
     /// Tier 3: run a voice.
     Node {
@@ -418,6 +432,13 @@ fn watch(board: &Board, notify: &str, interval: u64, once: bool) -> Result<(), S
     })
 }
 
+fn exit_on(r: Result<(), String>, cmd: &str, code: i32) {
+    if let Err(e) = r {
+        eprintln!("runo {cmd}: {e}");
+        std::process::exit(code);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
@@ -455,6 +476,20 @@ fn main() {
                 std::process::exit(3);
             }
         }
+        Cmd::Enroll {
+            singer,
+            chorus,
+            credential,
+        } => exit_on(
+            chorus::enroll(&singer, &chorus, credential.as_deref()),
+            "enroll",
+            4,
+        ),
+        Cmd::Init {
+            manifest,
+            chorus,
+            sign,
+        } => exit_on(chorus::init(&manifest, &chorus, sign), "init", 4),
         other => println!(
             "{other:?}: not yet implemented; see the technical specification §14 for its milestone"
         ),

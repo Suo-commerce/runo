@@ -1,0 +1,37 @@
+# Goliath's first chorus: presence (decided 4 Nov 2026). The ThinkPad is a real machine; `desk`
+# and `sentinel` run in Docker first and on a separate host (a Scaleway VM) for the milestone 6
+# gate. Paths are relative to this file.
+name      = "goliath"
+allocator = "owner"
+
+[[voice]]
+singer     = "thinkpad"
+profile    = "../../profiles/goliath.toml"
+host       = "thinkpad"
+provider   = "none"
+credential = "file://keys/thinkpad.key"
+network    = "tailnet"
+
+[[voice]]
+singer     = "desk"
+profile    = "../../profiles/goliath.toml"
+host       = "docker-desk"
+provider   = "none"
+credential = "file://keys/desk.key"
+network    = "docker"
+
+[[voice]]
+singer     = "sentinel"
+profile    = "../../profiles/sentinel.toml"
+host       = "docker-sentinel"
+provider   = "none"
+credential = "file://keys/sentinel.key"
+network    = "docker"
+
+[[voice]]
+singer     = "owner"
+profile    = "../../profiles/owner.toml"
+host       = "thinkpad"
+provider   = "none"
+credential = "file://keys/owner.key"
+network    = "tailnet"

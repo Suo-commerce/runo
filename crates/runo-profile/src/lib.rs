@@ -1,6 +1,8 @@
 //! Profile and chorus manifest TOML with load-time checks (technical spec §10).
 //! A profile holds exactly four things: role, state machine, listening graph, cadence source.
 
+pub mod manifest;
+
 use serde::Deserialize;
 
 /// Failure to load or validate a profile or manifest.
@@ -22,6 +24,10 @@ pub struct Profile {
     pub role: String,
     /// Refrain interval, e.g. `"60s"`; `None` for voices that never refrain.
     pub refrain_interval: Option<String>,
+    /// The states in which the voice refrains; `None` means every state. A sleeping machine is
+    /// silent by design (technical spec §10, Goliath profile).
+    #[serde(default)]
+    pub refrain_while: Option<Vec<String>>,
     /// Probe interval.
     pub probe_interval: String,
     /// `process`, `host` or `replicated:<k>`.
@@ -107,6 +113,13 @@ fn check_profile(p: &Profile) -> Result<(), ProfileError> {
         return Err(ProfileError::Check(
             "states.initial is not a declared state".into(),
         ));
+    }
+    for s in p.refrain_while.iter().flatten() {
+        if !known.contains(s.as_str()) {
+            return Err(ProfileError::Check(format!(
+                "refrain_while names {s}, which is not a declared state"
+            )));
+        }
     }
     let e = &p.cadence.escalate;
     if e.len() != 3 {

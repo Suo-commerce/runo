@@ -457,10 +457,15 @@ pub struct ClosureSnapshot {
     pub forks: Vec<(ChainKey, Vec<VerseId>)>,
 }
 
-mod serde_bytes_64 {
+/// Serde for a 64-byte signature as one CBOR byte string, as verses and refrains carry it.
+pub mod serde_bytes_64 {
     use serde::de::{Error as _, Visitor};
     use serde::{Deserializer, Serializer};
 
+    /// Serialize as bytes.
+    ///
+    /// # Errors
+    /// The serializer's own.
     pub fn serialize<S: Serializer>(v: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_bytes(v)
     }
@@ -490,6 +495,10 @@ mod serde_bytes_64 {
         }
     }
 
+    /// Deserialize exactly 64 bytes.
+    ///
+    /// # Errors
+    /// Any other length.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
         d.deserialize_bytes(V)
     }

@@ -1,6 +1,7 @@
 # A Goliath machine: boot session as task; silent by design while asleep
 role = "machine"
 refrain_interval = "15m"
+refrain_while    = ["online", "wake", "docked", "undocked"]
 probe_interval   = "5m"
 durability       = "host"
 
