@@ -38,16 +38,16 @@ tracing = "0.1"
 proptest = "1"
 
 # workspace-internal
-runo-core = { path = "crates/runo-core" }
-runo-profile = { path = "crates/runo-profile" }
-runo-cadence = { path = "crates/runo-cadence" }
-runo-store = { path = "crates/runo-store" }
-runo-clock = { path = "crates/runo-clock" }
-runo-fence = { path = "crates/runo-fence" }
-runo-node = { path = "crates/runo-node" }
-runo-scribe = { path = "crates/runo-scribe" }
-runo-adapter-paperclip = { path = "crates/runo-adapter-paperclip" }
-runo-testkit = { path = "crates/runo-testkit" }
+runo-core = { path = "crates/runo-core", version = "0.1.0" }
+runo-profile = { path = "crates/runo-profile", version = "0.1.0" }
+runo-cadence = { path = "crates/runo-cadence", version = "0.1.0" }
+runo-store = { path = "crates/runo-store", version = "0.1.0" }
+runo-clock = { path = "crates/runo-clock", version = "0.1.0" }
+runo-fence = { path = "crates/runo-fence", version = "0.1.0" }
+runo-node = { path = "crates/runo-node", version = "0.1.0" }
+runo-scribe = { path = "crates/runo-scribe", version = "0.1.0" }
+runo-adapter-paperclip = { path = "crates/runo-adapter-paperclip", version = "0.1.0" }
+runo-testkit = { path = "crates/runo-testkit", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

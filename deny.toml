@@ -5,6 +5,12 @@ all-features = true
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+# Transitive duplicates we do not control; each is a proc-macro or a CPU-feature shim, so neither
+# ships twice in a binary's logic. Re-check when the upstream crates converge.
+skip = [
+  { crate = "cpufeatures:0.2", reason = "curve25519-dalek (via ed25519-dalek) is still on 0.2; blake3 is on 0.3" },
+  { crate = "syn:2", reason = "serde_derive, thiserror and clap_derive are on syn 2; async-trait moved to syn 3" },
+]
 
 [licenses]
 allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]

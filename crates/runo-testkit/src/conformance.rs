@@ -4,8 +4,10 @@
 /// Run the `SongStore` conformance suite against a store constructor.
 ///
 /// Checks, once milestone 2 lands: durability levels honoured or refused at open; `append`
-/// refuses fenced chains; `Stored` on byte-identical re-append; `archive` only below the fence;
-/// `record` only for allocator kinds on a closed task; `head` scoped per task.
+/// refuses fenced chains; `Stored` on byte-identical re-append carries the class first persisted
+/// (an archived verse re-appended stays `History`); `read_since` and `get` return every record
+/// with its class; `archive` only below the fence; `record` only for allocator kinds on a closed
+/// task; `head` scoped per task.
 #[macro_export]
 macro_rules! store_conformance {
     ($name:ident, $make:expr) => {
