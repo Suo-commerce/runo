@@ -5,3 +5,8 @@
 /runo-replay/replay-out/
 *.jsonl.bak
 .DS_Store
+
+# TLC scratch
+model/states/
+model/*_TTrace_*.tla
+model/tla2tools.jar
