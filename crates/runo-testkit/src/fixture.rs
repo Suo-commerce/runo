@@ -68,6 +68,29 @@ impl Chorus {
         }
     }
 
+    /// Fence every lane on exactly `resources` in the current roster (the simulator's second
+    /// replica, a merge gate).
+    ///
+    /// # Panics
+    /// Never: the current roster always exists.
+    pub fn fence_lanes_on(&mut self, resources: &[ResourceId]) {
+        let doc = self.rosters.get_mut(&self.current).expect("current roster");
+        for v in &mut doc.voices {
+            if v.singer.0.starts_with("lane") {
+                v.fenced = resources.to_vec();
+            }
+        }
+    }
+
+    /// The roster in force.
+    ///
+    /// # Panics
+    /// Never: the current roster always exists.
+    #[must_use]
+    pub fn roster(&self) -> &RosterDoc {
+        &self.rosters[&self.current]
+    }
+
     /// Start a new run under a new roster version with the same voices.
     pub fn next_roster(&mut self) -> RosterVersion {
         let mut doc = self.rosters[&self.current].clone();

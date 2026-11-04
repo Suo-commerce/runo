@@ -1,3 +1,4 @@
 # reorder
 description = "Verses delivered in random order. Must hold: every verse appended once, in seq order; S4."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "every verse appended once every earlier one has arrived"
+run = "cargo run --release -p runo-sim -- --scenario reorder"

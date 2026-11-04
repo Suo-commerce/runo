@@ -1,3 +1,4 @@
 # refrain-no-progress
 description = "A lane refrains and acks with a fixed height. Must hold: Progress suspect at 2x; vouches do not suppress it."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "progress is suspected at exactly the suspect threshold"
+run = "cargo run --release -p runo-sim -- --scenario refrain-no-progress"

@@ -106,6 +106,8 @@ pub struct JournalState {
     pending: BTreeMap<(SingerId, TaskId), (Epoch, Phase)>,
     /// Every grant ever sung per task, with its holder and epoch.
     grants: BTreeMap<TaskId, Vec<(SingerId, Epoch, VerseId)>>,
+    /// The latest activated epoch and grant per chain owner.
+    activated: BTreeMap<(SingerId, TaskId), (Epoch, VerseId)>,
     /// Task lifecycles.
     tasks: BTreeMap<TaskId, Lifecycle>,
 }
@@ -138,9 +140,16 @@ impl JournalState {
                     }
                 }
             }
-            Event::Activated { singer, task, .. } => {
-                if let Some((_, phase)) = self.pending.get_mut(&(singer.clone(), task.clone())) {
+            Event::Activated {
+                singer,
+                task,
+                grant,
+            } => {
+                let key = (singer.clone(), task.clone());
+                if let Some((epoch, phase)) = self.pending.get_mut(&key) {
                     *phase = Phase::Done;
+                    let epoch = *epoch;
+                    self.activated.insert(key, (epoch, *grant));
                 }
             }
             Event::Abandoned { singer, task, .. } => {
@@ -211,6 +220,12 @@ impl JournalState {
                 ))
             }
         }
+    }
+
+    /// The latest activated epoch and its grant for a chain owner.
+    #[must_use]
+    pub fn activated(&self, singer: &SingerId, task: &TaskId) -> Option<(Epoch, VerseId)> {
+        self.activated.get(&(singer.clone(), task.clone())).copied()
     }
 
     /// The task's lifecycle.

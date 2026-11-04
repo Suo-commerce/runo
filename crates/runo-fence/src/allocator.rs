@@ -95,6 +95,46 @@ impl<J: AllocatorJournal> Allocator<J> {
     /// The task is closing or closed, the singer has no fenced resources, or storage fails.
     pub async fn relaunch(&self, singer: &SingerId, task: &TaskId) -> Result<Outcome, FenceError> {
         let _one = self.one_at_a_time.lock().await;
+        self.relaunch_locked(singer, task).await
+    }
+
+    /// Relaunch because `stale` was suspected: if an epoch above it is already activated, that
+    /// activation is the answer and no new epoch is granted. Two voices that suspect the same
+    /// incarnation and both ask get one relaunch between them (`relaunch-race`, §12).
+    ///
+    /// # Errors
+    /// As [`Allocator::relaunch`].
+    pub async fn relaunch_stale(
+        &self,
+        singer: &SingerId,
+        task: &TaskId,
+        stale: Epoch,
+    ) -> Result<Outcome, FenceError> {
+        let _one = self.one_at_a_time.lock().await;
+        if let Some((epoch, grant)) = self.journal.read()?.activated(singer, task)
+            && epoch > stale
+        {
+            let activation = self
+                .store
+                .task_records(task)
+                .await?
+                .into_iter()
+                .map(|r| r.verse)
+                .find(|v| matches!(&v.payload, Payload::Activation { grant: g, .. } if *g == grant))
+                .map(|v| v.seal.sum)
+                .ok_or_else(|| {
+                    FenceError::Setup("an activated grant has no Activation in the song".into())
+                })?;
+            return Ok(Outcome::Activated { grant, activation });
+        }
+        self.relaunch_locked(singer, task).await
+    }
+
+    async fn relaunch_locked(
+        &self,
+        singer: &SingerId,
+        task: &TaskId,
+    ) -> Result<Outcome, FenceError> {
         if self.journal.task_state(task).await? != TaskState::Open {
             return Err(FenceError::Closing);
         }

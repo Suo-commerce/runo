@@ -1,3 +1,4 @@
 # partitioned-install
 description = "One replica unreachable during install. Must hold: replacement inactive; dark replica may accept the old epoch until it receives the fence; no write under the new epoch anywhere."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "activation within one retry after the replica returns"
+run = "cargo run --release -p runo-sim -- --scenario partitioned-install"

@@ -1,3 +1,4 @@
 # wait-overdue
 description = "A lane blocks longer than its task deadline, then resumes. Must hold: only the waiting clock escalates; task time resumes from its pre-wait value."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "waiting escalates while blocked; task time resumes at resume"
+run = "cargo run --release -p runo-sim -- --scenario wait-overdue"

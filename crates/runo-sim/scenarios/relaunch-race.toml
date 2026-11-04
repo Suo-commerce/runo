@@ -1,3 +1,4 @@
 # relaunch-race
 description = "Two peers suspect the same lane and both ask the allocator. Must hold: exactly one epoch granted; S1."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "one allocator call per request; both answered with the same activation"
+run = "cargo run --release -p runo-sim -- --scenario relaunch-race"

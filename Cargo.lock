@@ -1273,6 +1273,7 @@ dependencies = [
 name = "runo-sim"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "runo-clock",
  "runo-core",

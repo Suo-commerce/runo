@@ -1,3 +1,4 @@
 # late-verse
 description = "Signed verse arrives after closure. Must hold: archived unchanged; addendum recorded; tome unchanged and verifies."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "the addendum is recorded in the same step"
+run = "cargo run --release -p runo-sim -- --scenario late-verse"

@@ -1,3 +1,4 @@
 # fence-restart
 description = "A resource restarts after acknowledging a fence. Must hold: fence persists; S1."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "the fence is read back on the first open after restart"
+run = "cargo run --release -p runo-sim -- --scenario fence-restart"
