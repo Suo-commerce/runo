@@ -47,6 +47,8 @@ pub struct Run {
     pub error: Option<String>,
     /// When it finished; `None` while running.
     pub finished_at: Option<String>,
+    /// When it was created; the run list is ordered by it, newest first.
+    pub created_at: Option<String>,
 }
 
 /// One board record, normalized, at the board time it happened.

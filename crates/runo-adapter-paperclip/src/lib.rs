@@ -5,8 +5,10 @@
 //!
 //! - [`board`]: the records read from the board, normalized to events.
 //! - [`herald`]: board events to lane evidence and signals, pure.
+//! - [`poll`]: the Paperclip API client, and successive pages to new events and gaps.
 //! - [`time`]: board timestamps to `Instant`.
 
 pub mod board;
 pub mod herald;
+pub mod poll;
 pub mod time;
