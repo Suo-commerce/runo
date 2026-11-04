@@ -571,3 +571,74 @@ fn a_vouch_buys_time_and_the_clock_climbs_again() {
         [Level::Crossed]
     );
 }
+
+fn infer(c: &mut Chorus, now: Instant, what: crate::Evidence<'_>) {
+    c.observe(
+        now,
+        &s("herald"),
+        Observation::Inferred {
+            singer: &s("a"),
+            task: &t(),
+            what,
+        },
+    );
+}
+
+fn advisory() -> Promise {
+    Promise {
+        unit: "issue".into(),
+        cadence: thirty(),
+        checkpoints: true,
+        source: "board history".into(),
+    }
+}
+
+/// The waiting acceptance test again, from board inference instead of the lane's own verses:
+/// one set of clocks for both modes (technical spec §15).
+#[test]
+fn inferred_evidence_follows_the_same_clock_rules() {
+    use crate::Evidence::{Blocked, Ended, Progressed, Started, Unblocked};
+    let mut c = Chorus::new(config(false));
+    let p = advisory();
+    infer(&mut c, at(0), Started(&p));
+    infer(&mut c, at(5), Started(&p));
+    infer(&mut c, at(10), Blocked("review"));
+    let e = c.tick(at(40));
+    assert_eq!(levels(&e, Clock::Waiting), [Level::Crossed]);
+    assert!(
+        levels(&e, Clock::Task).is_empty(),
+        "a wait pauses the task clock"
+    );
+    infer(&mut c, at(100), Unblocked);
+    assert_eq!(c.take_resolutions()[0].clock, Clock::Waiting);
+    assert_eq!(
+        levels(&c.tick(at(120)), Clock::Task),
+        [Level::Crossed],
+        "a repeated start did not reset the task clock"
+    );
+    infer(&mut c, at(125), Progressed(1));
+    infer(&mut c, at(126), Progressed(1));
+    assert_eq!(
+        row_clock(&c, at(129), 1),
+        ClockState::Running {
+            elapsed: Millis(4 * 60_000),
+            level: Level::Quiet
+        },
+        "the same mark twice is one piece of progress, timed from the first"
+    );
+    infer(&mut c, at(130), Ended);
+    assert!(c.rows(at(130)).is_empty(), "an ended lane leaves the view");
+}
+
+#[test]
+fn inference_never_proves_reachability() {
+    let mut c = Chorus::new(config(true));
+    let p = advisory();
+    infer(&mut c, at(0), crate::Evidence::Started(&p));
+    infer(&mut c, at(1), crate::Evidence::Progressed(1));
+    assert_eq!(row_clock(&c, at(500), 0), ClockState::Idle);
+    assert!(
+        levels(&c.tick(at(500)), Clock::Reachability).is_empty(),
+        "no evidence of reachability, so nothing to time"
+    );
+}

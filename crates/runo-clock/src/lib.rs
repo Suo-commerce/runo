@@ -21,7 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use runo_core::time::Instant;
 use runo_core::{
-    About, Cadence, Clock, Domains, Epoch, Millis, Payload, Refrain, SingerId, TaskId, Verse,
+    About, Cadence, Clock, Domains, Epoch, Hash, Millis, Payload, Promise, Refrain, SingerId,
+    TaskId, Verse,
 };
 
 /// One observation about a peer.
@@ -47,6 +48,32 @@ pub enum Observation<'a> {
         /// Who suspects.
         from: &'a SingerId,
     },
+    /// Evidence about a lane inferred from a board by a herald (Watch mode, technical spec §15).
+    /// It drives the same clock rules as the lane's own verses, but it is never a verse in the
+    /// lane's name and never proves reachability.
+    Inferred {
+        /// The lane's singer.
+        singer: &'a SingerId,
+        /// The lane's task.
+        task: &'a TaskId,
+        /// What the board showed.
+        what: Evidence<'a>,
+    },
+}
+
+/// What a board can show about a lane, in clock terms.
+#[derive(Clone, Copy, Debug)]
+pub enum Evidence<'a> {
+    /// Work started under this (advisory) promise; like `Claimed`. Watch has no epochs.
+    Started(&'a Promise),
+    /// New work appeared; `mark` must grow for it to count, like a verse's height.
+    Progressed(u64),
+    /// The lane waits on something, named.
+    Blocked(&'a str),
+    /// The wait ended.
+    Unblocked,
+    /// The work ended (done, cancelled, or taken off the board).
+    Ended,
 }
 
 /// Suspicion level per clock.
@@ -269,6 +296,15 @@ impl Chorus {
         match o {
             Observation::Refrain(r) => self.refrain(now, r),
             Observation::Verse(v) => self.verse(now, v),
+            Observation::Inferred { singer, task, what } => match what {
+                Evidence::Started(promise) => {
+                    self.claimed(now, singer, task, Epoch(0), promise, (0, None));
+                }
+                Evidence::Progressed(mark) => self.progressed(now, singer, task, (mark, None)),
+                Evidence::Blocked(on) => self.waits(now, singer, task, Some(on)),
+                Evidence::Unblocked => self.waits(now, singer, task, None),
+                Evidence::Ended => self.complete(singer, task, Cleared::Completed),
+            },
             Observation::Vouch {
                 about,
                 from: voucher,
@@ -407,14 +443,29 @@ impl Chorus {
         }
         self.heard(now, peer, task);
         match &v.payload {
-            Payload::Claimed { promise, .. } => self.claimed(now, v, promise),
+            Payload::Claimed { promise, .. } => {
+                let mark = (v.header.progress.height, v.header.progress.head);
+                self.claimed(now, peer, task, v.header.epoch, promise, mark);
+            }
             Payload::Boundary {
                 event, blocked_on, ..
             } => {
-                self.progressed(now, v);
-                self.boundary(now, peer, task, event, blocked_on.as_ref());
+                self.progressed(
+                    now,
+                    peer,
+                    task,
+                    (v.header.progress.height, v.header.progress.head),
+                );
+                if self.config.terminal.contains(event) {
+                    self.complete(peer, task, Cleared::Completed);
+                } else {
+                    self.waits(now, peer, task, blocked_on.as_deref());
+                }
             }
-            Payload::Work { .. } => self.progressed(now, v),
+            Payload::Work { head, .. } => {
+                let head = head.or(v.header.progress.head);
+                self.progressed(now, peer, task, (v.header.progress.height, head));
+            }
             Payload::Close { task: closed, .. } => {
                 let lanes: Vec<SingerId> = self
                     .peers
@@ -455,12 +506,19 @@ impl Chorus {
         }
     }
 
-    fn claimed(&mut self, now: Instant, v: &Verse, promise: &runo_core::Promise) {
-        let (peer, task) = (&v.header.singer, &v.header.task);
+    fn claimed(
+        &mut self,
+        now: Instant,
+        peer: &SingerId,
+        task: &TaskId,
+        epoch: Epoch,
+        promise: &Promise,
+        mark: (u64, Option<Hash>),
+    ) {
         let relaunch = {
             let p = self.entry(peer, task);
-            let relaunch = p.task.is_some() && Some(v.header.epoch) > p.epoch;
-            if p.task.is_some() && Some(v.header.epoch) <= p.epoch {
+            let relaunch = p.task.is_some() && Some(epoch) > p.epoch;
+            if p.task.is_some() && Some(epoch) <= p.epoch {
                 return; // the task clock never resets within an epoch
             }
             relaunch
@@ -471,7 +529,7 @@ impl Chorus {
             }
         }
         let p = self.entry(peer, task);
-        p.epoch = Some(v.header.epoch);
+        p.epoch = Some(epoch);
         p.task = Some(TaskClock {
             claimed_at: now,
             cadence: promise.cadence,
@@ -481,16 +539,16 @@ impl Chorus {
         p.waiting_since = None;
         p.blocked_on = None;
         p.progress_since = Some(now);
-        p.last_progress = Some((v.header.progress.height, v.header.progress.head));
+        p.last_progress = Some(mark);
     }
 
-    fn progressed(&mut self, now: Instant, v: &Verse) {
-        let (peer, task) = (&v.header.singer, &v.header.task);
-        let head = match &v.payload {
-            Payload::Work { head: Some(h), .. } => Some(*h),
-            _ => v.header.progress.head,
-        };
-        let new = (v.header.progress.height, head);
+    fn progressed(
+        &mut self,
+        now: Instant,
+        peer: &SingerId,
+        task: &TaskId,
+        new: (u64, Option<Hash>),
+    ) {
         let p = self.entry(peer, task);
         let advanced = p
             .last_progress
@@ -502,23 +560,12 @@ impl Chorus {
         }
     }
 
-    fn boundary(
-        &mut self,
-        now: Instant,
-        peer: &SingerId,
-        task: &TaskId,
-        event: &str,
-        blocked_on: Option<&String>,
-    ) {
-        if self.config.terminal.contains(event) {
-            self.complete(peer, task, Cleared::Completed);
-            return;
-        }
+    fn waits(&mut self, now: Instant, peer: &SingerId, task: &TaskId, blocked_on: Option<&str>) {
         let p = self.entry(peer, task);
         match blocked_on {
             Some(b) => {
                 p.waiting_since.get_or_insert(now);
-                p.blocked_on = Some(b.clone());
+                p.blocked_on = Some(b.to_owned());
             }
             None => {
                 if let Some(since) = p.waiting_since.take() {

@@ -288,7 +288,11 @@ pub enum Observation<'a> {
     Verse(&'a Verse),                     // reachability; progress if height/head advanced; task on Claimed
     Vouch { about: &'a About, from: &'a SingerId },
     SuspectHeard { about: &'a About, clock: Clock, from: &'a SingerId },
+    Inferred { singer: &'a SingerId, task: &'a TaskId, what: Evidence<'a> }, // Watch mode only
 }
+// What a board can show about a lane, fed to the same rules as the lane's own verses (§15):
+// never a verse in the lane's name, never proof of reachability.
+pub enum Evidence<'a> { Started(&'a Promise), Progressed(u64), Blocked(&'a str), Unblocked, Ended }
 
 pub struct PeerClocks {
     reach_since: Instant, progress_since: Instant,
