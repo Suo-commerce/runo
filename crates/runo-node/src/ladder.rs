@@ -74,7 +74,12 @@ impl Ladder {
     /// The file exists and cannot be read.
     pub fn open(path: Option<PathBuf>) -> Result<Self, EpisodeError> {
         let episodes = match &path {
-            Some(p) => Episodes::load(p)?,
+            Some(p) => {
+                if let Some(dir) = p.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                Episodes::load(p)?
+            }
             None => Episodes::default(),
         };
         Ok(Self {

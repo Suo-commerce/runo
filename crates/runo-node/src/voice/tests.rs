@@ -668,7 +668,10 @@ mod ladder {
     async fn one_message_per_level_a_suspect_verse_and_one_all_clear() {
         let f = fleet();
         let mut v = super::started(&f).await;
-        let path = std::env::temp_dir().join(format!("runo-ladder-{}.json", std::process::id()));
+        let path = std::env::temp_dir()
+            .join(format!("runo-ladder-{}", std::process::id()))
+            .join("not-yet-made")
+            .join("thinkpad.json");
         let _ = std::fs::remove_file(&path);
         let mut ladder = Ladder::open(Some(path.clone())).unwrap();
         let out = Terminal::new(Vec::new());
