@@ -5,6 +5,10 @@
 //! **Control protocol.** One JSON line per connection, `{"event": "sleep"}` or `{"event":
 //! "waiting", "blocked_on": "vpn"}`, answered by one line, `{"sung": "<verse id>"}` or
 //! `{"refused": "<why>"}`. The socket is the host's own: the node creates it mode 0600.
+//!
+//! **Calls.** After every probe, crossings go to the [`Ladder`]; what it owes a person goes to the
+//! [`HumanChannel`]; a newly suspected peer gets a signed `Suspect` verse. The log carries the
+//! node's own events (what it sang, incidents, failures), never one line per tick.
 
 use std::os::unix::net::UnixStream as UnixStreamStd;
 use std::path::Path;
@@ -17,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::channel::human::HumanChannel;
+use crate::ladder::Ladder;
 use crate::voice::{Heard, Voice, VoiceError};
 use runo_store::{RefrainSlot, VerseReader, VerseWriter};
 
@@ -88,31 +94,43 @@ pub async fn ask(path: &Path, req: &SingRequest) -> std::io::Result<SingReply> {
     serde_json::from_str(&answer).map_err(std::io::Error::other)
 }
 
-/// Run until `stop` resolves: start, then refrain, probe and serve the control socket. Every
-/// finding goes to `log` as one line.
+/// What the loop talks to besides the voice: time, the log, the ladder and the person.
+pub struct Env<'a> {
+    /// Monotonic time for the clocks.
+    pub clock: &'a dyn Clock,
+    /// Wall time for `sung_at` and the ledger.
+    pub wall: &'a (dyn Fn() -> Timestamp + Sync),
+    /// The node's own events, one line each.
+    pub log: &'a mut (dyn FnMut(String) + Send),
+    /// Episodes and the messages they owe.
+    pub ladder: &'a mut Ladder,
+    /// Where a person reads them.
+    pub channel: &'a dyn HumanChannel,
+}
+
+/// Run until `stop` resolves: start, then refrain, probe and serve the control socket.
 ///
 /// # Errors
 /// The start failed; later store errors are logged and retried on the next timer.
 pub async fn run<S>(
     voice: &mut Voice<S>,
-    clock: &dyn Clock,
-    wall: &(dyn Fn() -> Timestamp + Sync),
+    env: &mut Env<'_>,
     control: UnixListener,
     timers: Timers,
-    log: &mut (dyn FnMut(String) + Send),
     stop: impl std::future::Future<Output = ()>,
 ) -> Result<(), VoiceError>
 where
     S: VerseReader + VerseWriter + RefrainSlot + ?Sized,
 {
-    let heard = voice.start(clock.now(), &wall()).await?;
-    log(format!(
+    let heard = voice.start(env.clock.now(), &(env.wall)()).await?;
+    let line = format!(
         "{} sang {} on {}",
-        wall().0,
+        (env.wall)().0,
         voice.state().unwrap_or("?"),
         voice.task().0
-    ));
-    report(&heard, log);
+    );
+    (env.log)(line);
+    take(voice, env, &heard).await;
     let mut refrain = tokio::time::interval(timers.refrain);
     let mut probe = tokio::time::interval(timers.probe);
     tokio::pin!(stop);
@@ -120,30 +138,58 @@ where
         tokio::select! {
             () = &mut stop => return Ok(()),
             _ = refrain.tick() => {
-                if let Err(e) = voice.refrain(&wall()).await {
-                    log(format!("{} refrain failed, retrying next interval: {e}", wall().0));
+                if let Err(e) = voice.refrain(&(env.wall)()).await {
+                    (env.log)(format!("{} refrain failed, retrying next interval: {e}", (env.wall)().0));
                 }
             }
-            _ = probe.tick() => match voice.probe(clock.now()).await {
-                Ok(h) => report(&h, log),
-                Err(e) => log(format!("{} probe failed, retrying next interval: {e}", wall().0)),
+            _ = probe.tick() => match voice.probe(env.clock.now()).await {
+                Ok(h) => take(voice, env, &h).await,
+                Err(e) => (env.log)(format!("{} probe failed, retrying next interval: {e}", (env.wall)().0)),
             },
             conn = control.accept() => {
                 if let Ok((stream, _)) = conn {
-                    serve_one(voice, clock, wall, stream, log).await;
+                    serve_one(voice, env, stream).await;
                 }
             }
         }
     }
 }
 
-async fn serve_one<S>(
-    voice: &mut Voice<S>,
-    clock: &dyn Clock,
-    wall: &(dyn Fn() -> Timestamp + Sync),
-    stream: UnixStream,
-    log: &mut (dyn FnMut(String) + Send),
-) where
+/// What a probe heard: incidents to the log, crossings to the ladder, `Suspect` for a newly
+/// suspected peer, then every owed message to the person.
+pub async fn take<S>(voice: &mut Voice<S>, env: &mut Env<'_>, heard: &Heard)
+where
+    S: VerseReader + VerseWriter + RefrainSlot + ?Sized,
+{
+    report(heard, env.log);
+    let now = env.clock.now();
+    let wall = (env.wall)();
+    for e in env.ladder.record(voice, heard, now, &wall) {
+        match voice.suspect(now, &wall, &e).await {
+            Ok(_) => (env.log)(format!(
+                "{} sang suspect about {} ({:?})",
+                wall.0, e.peer.0, e.clock
+            )),
+            Err(err) => (env.log)(format!(
+                "{} could not sing suspect about {}: {err}",
+                wall.0, e.peer.0
+            )),
+        }
+    }
+    for o in env.ladder.owed() {
+        match env.channel.deliver(&o.notice, &o.text).await {
+            Ok(()) => {
+                if let Err(err) = env.ladder.delivered(&o) {
+                    (env.log)(format!("{} episode ledger not saved: {err}", wall.0));
+                }
+            }
+            Err(err) => (env.log)(format!("{} message not delivered, retrying: {err}", wall.0)),
+        }
+    }
+}
+
+async fn serve_one<S>(voice: &mut Voice<S>, env: &mut Env<'_>, stream: UnixStream)
+where
     S: VerseReader + VerseWriter + RefrainSlot + ?Sized,
 {
     let (r, mut w) = stream.into_split();
@@ -153,11 +199,11 @@ async fn serve_one<S>(
     let reply = match read {
         Ok(Ok(_)) => match serde_json::from_str::<SingRequest>(&line) {
             Ok(req) => match voice
-                .sing(clock.now(), &wall(), &req.event, req.blocked_on)
+                .sing(env.clock.now(), &(env.wall)(), &req.event, req.blocked_on)
                 .await
             {
                 Ok(id) => {
-                    log(format!("{} sang {}", wall().0, req.event));
+                    (env.log)(format!("{} sang {}", (env.wall)().0, req.event));
                     SingReply::Sung(display(&id.0))
                 }
                 Err(e) => SingReply::Refused(e.to_string()),
@@ -172,21 +218,8 @@ async fn serve_one<S>(
     }
 }
 
-/// One line per finding, in the clock's terms.
+/// Incidents, one line each: a record that failed ingress is never believed, and always said.
 pub fn report(heard: &Heard, log: &mut (dyn FnMut(String) + Send)) {
-    for e in &heard.escalations {
-        log(format!(
-            "{:?} {} {:?} on {}, overdue by {} min",
-            e.level,
-            e.peer.0,
-            e.clock,
-            e.task.as_ref().map_or("-", |t| t.0.as_str()),
-            e.overdue_by.0 / 60_000
-        ));
-    }
-    for r in &heard.resolutions {
-        log(format!("cleared {} {:?} ({:?})", r.peer.0, r.clock, r.why));
-    }
     for (singer, why) in &heard.incidents {
         log(format!(
             "incident: a record claiming to be {} was refused ({why:?}); it was not believed",

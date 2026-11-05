@@ -16,6 +16,7 @@ x-voice: &voice
   depends_on: [store]
   environment:
     RUNO_HOME: /keys
+    XDG_STATE_HOME: /keys/state   # the episode ledger: what was already announced
 
 services:
   store:

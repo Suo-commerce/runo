@@ -99,6 +99,9 @@ pub struct Notice {
     pub resolved: Option<Cleared>,
     /// The episode's reason at this level.
     pub reason: String,
+    /// This notice reports that an episode already delivered has cleared: a message of its own,
+    /// with its own key.
+    pub cleared: bool,
 }
 
 impl Notice {
@@ -110,8 +113,9 @@ impl Notice {
         for b in &self.id.opening.0.0[..8] {
             let _ = write!(opening, "{b:02x}");
         }
+        let cleared = if self.cleared { "/cleared" } else { "" };
         format!(
-            "{}/{}/{:?}/{opening}/{:?}",
+            "{}/{}/{:?}/{opening}/{:?}{cleared}",
             self.id.lane.singer.0, self.id.lane.task.0, self.id.clock, self.level
         )
         .to_lowercase()
@@ -212,6 +216,7 @@ impl Episodes {
                 level: e.level,
                 resolved: e.resolved.as_ref().map(|(_, why)| *why),
                 reason: e.reason.clone(),
+                cleared: false,
             })
             .collect()
     }

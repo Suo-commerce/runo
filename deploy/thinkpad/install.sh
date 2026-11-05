@@ -15,10 +15,13 @@ install -D -m 0644 "$REPO/examples/goliath/chorus.toml" "$HOME/.config/runo/goli
 for p in "$REPO"/profiles/*.toml; do install -D -m 0644 "$p" "$HOME/.config/runo/goliath/profiles/$(basename "$p")"; done
 mkdir -p "$HOME/.config/runo/chorus"
 cp -r "$CHORUS"/. "$HOME/.config/runo/chorus/"
-printf 'RUNO_STORE=%s\nRUNO_OWNER_KEY=%s\n' "$STORE" "$OWNER" > "$HOME/.config/runo/node.env"
+if [ ! -e "$HOME/.config/runo/node.env" ]; then
+  printf 'RUNO_STORE=%s\nRUNO_OWNER_KEY=%s\nRUNO_NODE_ARGS=\n' "$STORE" "$OWNER" > "$HOME/.config/runo/node.env"
+fi
 install -D -m 0644 runo-node.service "$HOME/.config/systemd/user/runo-node.service"
 systemctl --user daemon-reload
-systemctl --user enable --now runo-node.service
+systemctl --user enable runo-node.service
+systemctl --user restart runo-node.service
 echo "node running: systemctl --user status runo-node"
 
 echo "the sleep hook needs root (it is a 20-line shell script; read it first: $PWD/runo-sleep)"

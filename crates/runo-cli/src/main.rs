@@ -92,6 +92,19 @@ enum Cmd {
         /// The control socket [default: `$XDG_RUNTIME_DIR/runo/<singer>.sock`].
         #[arg(long)]
         control: Option<std::path::PathBuf>,
+        /// The episode ledger, so nothing is announced twice across restarts [default:
+        /// `$XDG_STATE_HOME/runo/node/<singer>.json`].
+        #[arg(long)]
+        state: Option<std::path::PathBuf>,
+        /// Where messages go: `terminal`, `telegram`; repeat for both.
+        #[arg(long, default_value = "terminal")]
+        notify: Vec<String>,
+        /// The Telegram chat to write to (its numeric id).
+        #[arg(long)]
+        telegram_chat: Option<String>,
+        /// The environment variable holding the Telegram bot token (never the token itself).
+        #[arg(long, default_value = "RUNO_TELEGRAM_TOKEN")]
+        telegram_token_env: String,
     },
     /// Declare a state through the running node: `runo sing sleep`, `runo sing wake`.
     Sing {
@@ -497,8 +510,13 @@ fn chorus_run(cmd: Cmd) {
             store,
             owner_key,
             control,
+            state,
+            notify,
+            telegram_chat,
+            telegram_token_env,
         } => {
             let control = node::control_path(&singer, control);
+            let state = node::state_path(&singer, state);
             exit_on(
                 node::node(&node::NodeArgs {
                     singer: &singer,
@@ -508,6 +526,10 @@ fn chorus_run(cmd: Cmd) {
                     store: &store,
                     owner_key: owner_key.as_deref(),
                     control,
+                    state,
+                    notify: &notify,
+                    telegram_chat: telegram_chat.as_deref(),
+                    telegram_token_env: &telegram_token_env,
                 }),
                 "node",
                 5,
