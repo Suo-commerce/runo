@@ -70,8 +70,10 @@ async fn a_chain_written_through_the_service_is_readable_by_the_replay_kit() {
 
     // HOD-43 closes; a late verse is archived after it.
     let snap = s.put_blob(b"closure snapshot of HOD-43").await.unwrap();
+    let closing = c.closing(&t2);
+    s.append(&closing, host).await.unwrap();
     let close = c.close(&t2, snap);
-    s.install_fence(&close).await.unwrap();
+    s.install_fence(&closing).await.unwrap();
     s.record(&close, host).await.unwrap();
     s.archive(&c.work(&b, &t2, Epoch(0), None), host)
         .await
@@ -92,7 +94,7 @@ async fn a_chain_written_through_the_service_is_readable_by_the_replay_kit() {
         "read-song.py failed:\n{stdout}\n{stderr}"
     );
     assert!(
-        stdout.starts_with("13 records in 6 chains, 2 tasks, 3 singers"),
+        stdout.starts_with("14 records in 6 chains, 2 tasks, 3 singers"),
         "{stdout}"
     );
     assert!(stdout.contains("fork: lane-1"), "{stdout}");

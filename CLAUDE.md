@@ -51,6 +51,7 @@ If you need one of these somewhere else, import it. If it does not exist, add it
 
 - `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - `cargo deny check`; `npx jscpd crates`
+- `cargo run --release -p runo-sim -- --seeds 1000` (the simulator sweep runs here, not in CI)
 - A new trait implementation runs its conformance suite.
 - A change to a Core rule cites the spec section it implements, in the PR body.
 

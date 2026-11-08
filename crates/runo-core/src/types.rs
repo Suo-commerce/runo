@@ -169,18 +169,6 @@ pub enum Verdict {
     Deny,
 }
 
-/// A resource's acknowledgement that a fence is installed and durable.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceAck {
-    /// Which resource.
-    pub resource: ResourceId,
-    /// The epoch it now enforces.
-    pub epoch: Epoch,
-    /// Durable at `Host` or better before this ack.
-    pub durable: bool,
-}
-
 /// The header every verse carries.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -288,8 +276,17 @@ pub enum Payload {
     Activation {
         /// The grant activated.
         grant: VerseId,
-        /// The acks, covering every listed resource.
-        acks: Vec<ResourceAck>,
+        /// The acks, covering every listed resource, each exactly as the resource gave it: the
+        /// grant it answers, the fence it enforces, the durability it reached (decided
+        /// 4 Nov 2026: the wire carries the same `FenceAck` the code does).
+        acks: Vec<crate::fence::FenceAck>,
+    },
+    /// The allocator starts closing a task (decided 4 Nov 2026): from this verse no new
+    /// reservation or activation is accepted for the task, and it is the verse that authorizes
+    /// `Fence::Closed` at every resource. `Close` follows once the snapshot is persisted.
+    Closing {
+        /// The task closing.
+        task: TaskId,
     },
     /// The allocator closes a task.
     Close {
@@ -455,6 +452,57 @@ pub struct ClosureSnapshot {
     pub chains: Vec<ChainEnd>,
     /// Forks from the fork index.
     pub forks: Vec<(ChainKey, Vec<VerseId>)>,
+}
+
+/// What a tome says about its task (technical spec §9). Derived from the included verses only;
+/// refrains never count.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Summary {
+    /// How many verses the tome includes.
+    pub verse_count: u64,
+    /// The last `progress` of the highest epoch.
+    pub final_progress: Progress,
+    /// The last `Boundary` event, if any.
+    pub outcome: Option<String>,
+    /// Reported timings: measurements from advisory `sung_at`, not elapsed time.
+    pub timing: Timing,
+}
+
+/// Reported timings from `sung_at`, never clamped.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Timing {
+    /// The first `Claimed` verse's `sung_at`.
+    pub first_claimed: Option<Timestamp>,
+    /// The last included verse's `sung_at`.
+    pub last_sung: Option<Timestamp>,
+    /// Time reported as waiting (between a `blocked_on` boundary and the next boundary without).
+    pub waits: Millis,
+    /// Last minus first minus waits, or why it could not be trusted.
+    pub net: NetTime,
+}
+
+/// A net time, or the reason it is not one.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum NetTime {
+    /// A plausible span.
+    Valid(Millis),
+    /// Negative, beyond the run's wall-clock bounds, or unreadable; the raw values are kept above.
+    Invalid(String),
+}
+
+/// The manifest blob a `Tome` names: CBOR of this (technical spec §3, §9).
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TomeManifest {
+    /// The `Close` verse.
+    pub close: VerseId,
+    /// The closure snapshot, copied so the tome describes itself.
+    pub snapshot: ClosureSnapshot,
+    /// What the included verses say.
+    pub summary: Summary,
 }
 
 /// Serde for a 64-byte signature as one CBOR byte string, as verses and refrains carry it.

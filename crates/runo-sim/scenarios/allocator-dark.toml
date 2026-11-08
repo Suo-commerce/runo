@@ -1,3 +1,4 @@
 # allocator-dark
 description = "Allocator unreachable during a suspicion. Must hold: nothing relaunched; suspicion visible."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "suspected at the suspect threshold; no grant while dark"
+run = "cargo run --release -p runo-sim -- --scenario allocator-dark"

@@ -22,6 +22,7 @@ use crate::{
 pub struct MemStore {
     state: Mutex<State>,
     resource: ResourceId,
+    ceiling: Durability,
 }
 
 impl MemStore {
@@ -36,7 +37,20 @@ impl MemStore {
         Ok(Self {
             state: Mutex::new(State::default()),
             resource,
+            ceiling: Durability::Process,
         })
+    }
+
+    /// A store for the simulator, where this memory stands for a disk that survives the
+    /// simulated crash of every process using it, and so may honestly claim `ceiling` (`Host`).
+    /// Never use it where a real crash can happen: the memory is lost with the process.
+    #[must_use]
+    pub fn simulated(resource: ResourceId, ceiling: Durability) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            resource,
+            ceiling,
+        }
     }
 
     /// An empty store named `song`, at `Process` durability.
@@ -45,6 +59,7 @@ impl MemStore {
         Self {
             state: Mutex::new(State::default()),
             resource: ResourceId("song".into()),
+            ceiling: Durability::Process,
         }
     }
 
@@ -56,8 +71,8 @@ impl MemStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn check(level: Durability) -> Result<(), StoreError> {
-        if level > Durability::Process {
+    fn check(&self, level: Durability) -> Result<(), StoreError> {
+        if level > self.ceiling {
             return Err(StoreError::Unsupported(level));
         }
         Ok(())
@@ -69,7 +84,7 @@ impl MemStore {
         }
         Receipt {
             id,
-            level: Durability::Process,
+            level: self.ceiling,
         }
     }
 }
@@ -99,7 +114,7 @@ impl VerseReader for MemStore {
 #[async_trait]
 impl VerseWriter for MemStore {
     async fn append(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError> {
-        Self::check(level)?;
+        self.check(level)?;
         let mut s = self.lock();
         let p = s.prepare_append(v)?;
         if let Prepared::Change(c, ()) = p {
@@ -107,11 +122,11 @@ impl VerseWriter for MemStore {
         }
         Ok(Receipt {
             id: v.seal.sum,
-            level: Durability::Process,
+            level: self.ceiling,
         })
     }
     async fn append_fenced(&self, v: &Verse, level: Durability) -> Result<Receipt, FenceError> {
-        Self::check(level)?;
+        self.check(level)?;
         // Check and apply under one lock: the atomic step of technical spec §7.
         let mut s = self.lock();
         let p = s.prepare_append_fenced(v)?;
@@ -120,16 +135,16 @@ impl VerseWriter for MemStore {
         }
         Ok(Receipt {
             id: v.seal.sum,
-            level: Durability::Process,
+            level: self.ceiling,
         })
     }
     async fn archive(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError> {
-        Self::check(level)?;
+        self.check(level)?;
         let p = self.lock().prepare_archive(v)?;
         Ok(self.write(p, v.seal.sum))
     }
     async fn record(&self, v: &Verse, level: Durability) -> Result<Receipt, StoreError> {
-        Self::check(level)?;
+        self.check(level)?;
         let p = self.lock().prepare_record(v)?;
         Ok(self.write(p, v.seal.sum))
     }
@@ -147,7 +162,7 @@ impl VerseWriter for MemStore {
 impl ResourceFenceStore for MemStore {
     async fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError> {
         let mut s = self.lock();
-        match s.prepare_install(grant, &self.resource, Durability::Process)? {
+        match s.prepare_install(grant, &self.resource, self.ceiling)? {
             Prepared::Change(c, ack) => {
                 s.apply(c);
                 Ok(ack)

@@ -116,6 +116,7 @@ Kinds fall into four families; anything else belongs in `body`.
 | Peer | `ruling` | A judgment of work: merge, reject, concur, dissent, accept, retract, permit, deny | `about` the work's verse; the verdict | Core |
 | Record | `grant` | The allocator reserves an epoch for a singer and task | The holder, task, epoch and the resources that must install it; its hash is the grant id | Core |
 | Record | `activation` | Every required resource has acknowledged the grant | The grant id and the acks; only now may the holder write | Core |
+| Record | `closing` | The allocator starts closing a task; this verse authorizes the closed fences | The task | Core |
 | Record | `close` | The allocator closes a task | A closure snapshot: the grants, each chain's endpoint, the forks | Core |
 | Record | `roster` | The roster changes at a run boundary | The new roster version, signed by the owner | Core |
 | Record | `tome` | A closed task's chains are compacted | The manifest and Merkle root (§6) | Core |
@@ -206,7 +207,7 @@ pub enum RecordClass { Current, History, Control }
 pub struct Record { pub verse: Verse, pub class: RecordClass, pub cursor: Cursor }
 
 /// A resource's acknowledgement of an installed fence: explicit, never supplied from the
-/// installer's context. `grant` is the Grant verse, or the Close verse for Fence::Closed.
+/// installer's context. `grant` is the Grant verse, or the Closing verse for Fence::Closed.
 pub struct FenceAck { pub resource: ResourceId, pub grant: VerseId, pub fence: Fence, pub durability: Durability }
 
 pub trait SongStore {
@@ -221,7 +222,7 @@ pub trait SongStore {
     fn archive(&self, verse: &Verse, level: Durability) -> Result<Receipt, StoreError>;
     /// Allocator records (Close, Tome, Addendum) on a closed task. Class: Control.
     fn record(&self, verse: &Verse, level: Durability) -> Result<Receipt, StoreError>;
-    /// Install a fence from the Grant verse (or the Close verse for Closed). Durable at `Host`
+    /// Install a fence from the Grant verse (or the Closing verse for Closed). Durable at `Host`
     /// or better before it acknowledges; never lowers an existing fence.
     fn install_fence(&self, grant: &Verse) -> Result<FenceAck, StoreError>;
     fn refrain(&self, r: &Refrain) -> Result<(), StoreError>;
@@ -283,7 +284,7 @@ Every voice holds an Ed25519 identity key and signs every verse and refrain. The
 
 When a task finishes, its chains are closed and sealed into a **tome**: one finished task, one tome. A tome is computed, not authored: the same closed chains always yield the same tome, so any voice can recompute and verify it. **Core.**
 
-- **Closure.** The consumer's control plane — the same authority that allocates fences — closes a task by installing a \*closed\* fence above every epoch at each resource, then singing a `close` verse carrying an immutable closure snapshot: the grants it issued, each chain's endpoint, and the forks from the fork index. Closure stops writes; anything arriving afterwards is history. The tome is computed from the snapshot, never from live heads, so a late verse cannot change what a sealed tome says.
+- **Closure.** The consumer's control plane — the same authority that allocates fences — closes a task by singing a `closing` verse, installing a \*closed\* fence above every epoch at each resource on that verse's authority, then singing a `close` verse carrying an immutable closure snapshot: the grants it issued, each chain's endpoint, and the forks from the fork index. Closure stops writes; anything arriving afterwards is history. The tome is computed from the snapshot, never from live heads, so a late verse cannot change what a sealed tome says.
 - **The scribe.** Tomes are written by the scribe, a component beside storage that is not a voice. It needs no signature of its own; it provides, like the cadence source.
 - **Closure manifest.** The tome lists, for every granted chain of the task, `(singer, epoch, last seq, last hash)`, any forks, and a Merkle root over the included verses. A Merkle root commits to what is included; the manifest, checked against the grants, states that nothing granted was left out.
 - **Late verses and forks.** A signed verse that arrives after closure is kept exactly as sung, and the scribe writes a separate addendum record naming both the verse and the tome; the tome itself is never reopened. Forks present at closure are listed in the manifest, so a tome never hides equivocation.

@@ -251,8 +251,13 @@ async fn closure_makes_control_records_and_history() {
     let snap = runo_store::VerseWriter::put_blob(&store, b"snap")
         .await
         .unwrap();
+    let closing = c.closing(&task);
+    assert!(
+        matches!(sing(&store, &c, &closing).await, Decision::Append { .. }),
+        "Closing is sung while the task is open"
+    );
     let close = c.close(&task, snap);
-    store.install_fence(&close).await.unwrap();
+    store.install_fence(&closing).await.unwrap();
     assert_eq!(sing(&store, &c, &close).await, Decision::Control);
     assert_eq!(sing(&store, &c, &late).await, Decision::History);
 }

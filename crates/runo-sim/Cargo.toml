@@ -20,6 +20,7 @@ runo-scribe = { workspace = true }
 runo-testkit = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 
 
     [dev-dependencies]

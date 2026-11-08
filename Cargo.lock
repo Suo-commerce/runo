@@ -1214,9 +1214,14 @@ name = "runo-fence"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "ed25519-dalek",
  "runo-core",
  "runo-store",
+ "runo-testkit",
+ "serde",
+ "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1254,16 +1259,21 @@ dependencies = [
 name = "runo-scribe"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "runo-core",
+ "runo-fence",
  "runo-store",
+ "runo-testkit",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
 name = "runo-sim"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "runo-clock",
  "runo-core",
@@ -1292,11 +1302,13 @@ dependencies = [
 name = "runo-testkit"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ed25519-dalek",
  "proptest",
  "rand_core 0.6.4",
  "runo-cadence",
  "runo-core",
+ "runo-fence",
  "runo-store",
  "tokio",
 ]

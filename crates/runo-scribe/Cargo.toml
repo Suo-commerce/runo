@@ -15,3 +15,9 @@ runo-core = { workspace = true }
 runo-store = { workspace = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+runo-fence = { workspace = true }
+runo-testkit = { workspace = true }
+tokio = { workspace = true }

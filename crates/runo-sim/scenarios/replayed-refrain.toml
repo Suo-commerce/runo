@@ -1,3 +1,4 @@
 # replayed-refrain
 description = "Old refrains redelivered. Must hold: no clock reset; progress escalation fires on time."
-bound_ticks = 0   # set per scenario when implemented: liveness is a bounded claim
+bound = "progress crosses at exactly the promise's call threshold"
+run = "cargo run --release -p runo-sim -- --scenario replayed-refrain"

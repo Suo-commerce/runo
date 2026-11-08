@@ -222,7 +222,7 @@ pub fn node(a: &NodeArgs<'_>) -> Result<(), String> {
 }
 
 /// The signed roster v1 from the chorus directory, refused unless signed by the pinned owner.
-fn roster(chorus: &Path, owner_key: Option<&str>) -> Result<runo_core::RosterDoc, String> {
+pub fn roster(chorus: &Path, owner_key: Option<&str>) -> Result<runo_core::RosterDoc, String> {
     let pin = owner_key.map(unhex).transpose()?;
     let doc = ChorusDir::at(chorus)
         .read_roster(1, pin.as_ref())
@@ -235,7 +235,7 @@ fn roster(chorus: &Path, owner_key: Option<&str>) -> Result<runo_core::RosterDoc
     Ok(doc)
 }
 
-async fn connect(store: &str) -> Result<StoreClient, String> {
+pub async fn connect(store: &str) -> Result<StoreClient, String> {
     match store.strip_prefix("tcp:") {
         Some(addr) => StoreClient::connect_tcp(addr).await,
         None => StoreClient::connect_unix(Path::new(store)).await,

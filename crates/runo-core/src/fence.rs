@@ -46,7 +46,7 @@ impl Fence {
 pub struct FenceAck {
     /// The resource that persisted the fence.
     pub resource: ResourceId,
-    /// The `Grant` verse (or, for `Fence::Closed`, the `Close` verse) the install answers.
+    /// The `Grant` verse (or, for `Fence::Closed`, the `Closing` verse) the install answers.
     pub grant: VerseId,
     /// The fence now enforced: the installed epoch, or `Closed`.
     pub fence: Fence,

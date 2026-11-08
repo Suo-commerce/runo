@@ -136,19 +136,28 @@ fn payload() -> impl Strategy<Value = Payload> {
             }),
         (
             vid(),
-            proptest::collection::vec((name(), any::<u64>(), any::<bool>()), 0..3)
+            proptest::collection::vec(
+                (name(), vid(), proptest::option::of(any::<u64>()), 0u8..4),
+                0..3
+            )
         )
             .prop_map(|(grant, acks)| Payload::Activation {
                 grant,
                 acks: acks
                     .into_iter()
-                    .map(|(r, e, d)| ResourceAck {
+                    .map(|(r, g, e, d)| fence::FenceAck {
                         resource: ResourceId(r),
-                        epoch: Epoch(e),
-                        durable: d
+                        grant: g,
+                        fence: e.map_or(fence::Fence::Closed, |e| fence::Fence::Epoch(Epoch(e))),
+                        durability: match d {
+                            0 => fence::Durability::Process,
+                            1 => fence::Durability::Host,
+                            k => fence::Durability::Replicated(k),
+                        },
                     })
                     .collect(),
             }),
+        name().prop_map(|t| Payload::Closing { task: TaskId(t) }),
         (name(), reference()).prop_map(|(t, snapshot)| Payload::Close {
             task: TaskId(t),
             snapshot

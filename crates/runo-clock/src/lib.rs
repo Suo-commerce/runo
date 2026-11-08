@@ -529,6 +529,7 @@ impl Chorus {
             | Payload::Suspect { .. }
             | Payload::Grant { .. }
             | Payload::Activation { .. }
+            | Payload::Closing { .. }
             | Payload::Tome { .. }
             | Payload::Addendum { .. }
             | Payload::Roster { .. } => {}

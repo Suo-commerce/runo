@@ -1,6 +1,7 @@
 //! The `runo` binary (technical spec §11, §15). Three tiers: diagnose, watch, chorus.
 
 mod chorus;
+mod fence;
 mod node;
 
 use clap::{Parser, Subcommand};
@@ -148,6 +149,33 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         every: u64,
     },
+    /// Recompute a tome from its closure snapshot and compare, byte for byte. Read-only.
+    Verify {
+        /// The Tome verse's id.
+        #[arg(long)]
+        tome: String,
+        /// The store: its Unix socket path, or `tcp:host:port`.
+        #[arg(long)]
+        store: String,
+    },
+    /// The allocator's commands (its host only): relaunch a stalled singer under a new epoch, or
+    /// close a task.
+    Fence {
+        #[command(subcommand)]
+        cmd: FenceCmd,
+        /// The chorus directory holding the signed roster.
+        #[arg(long, global = true)]
+        chorus: Option<std::path::PathBuf>,
+        /// The store: its Unix socket path, or `tcp:host:port`.
+        #[arg(long, global = true)]
+        store: Option<String>,
+        /// The owner's public key as `runo init --sign` printed it.
+        #[arg(long, global = true)]
+        owner_key: Option<String>,
+        /// The allocator's journal [default: `$XDG_STATE_HOME/runo/allocator.jsonl`].
+        #[arg(long, global = true)]
+        journal: Option<std::path::PathBuf>,
+    },
     /// The chorus's store.
     Store {
         #[command(subcommand)]
@@ -211,6 +239,25 @@ impl Board {
             self.waiting_minutes,
         )
     }
+}
+
+#[derive(Subcommand, Debug)]
+enum FenceCmd {
+    /// Reserve the next epoch, grant it, fence every resource, activate (technical spec §8).
+    Relaunch {
+        /// Who to relaunch.
+        #[arg(long)]
+        singer: String,
+        /// On which task.
+        #[arg(long)]
+        task: String,
+    },
+    /// Close a task: closed fences everywhere, one snapshot, the Close verse.
+    Close {
+        /// The task.
+        #[arg(long)]
+        task: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -619,6 +666,30 @@ fn main() {
             sign,
         } => exit_on(chorus::init(&manifest, &chorus, sign), "init", 4),
         cmd @ (Cmd::Node { .. } | Cmd::Sing { .. } | Cmd::View { .. }) => chorus_run(cmd),
+        Cmd::Verify { tome, store } => exit_on(fence::verify(&store, &tome), "verify", 7),
+        Cmd::Fence {
+            cmd,
+            chorus,
+            store,
+            owner_key,
+            journal,
+        } => {
+            let (Some(chorus), Some(store)) = (chorus, store) else {
+                eprintln!("runo fence: --chorus and --store are required");
+                std::process::exit(6);
+            };
+            let a = fence::FenceArgs {
+                chorus: &chorus,
+                store: &store,
+                owner_key: owner_key.as_deref(),
+                journal: fence::journal_path(journal),
+            };
+            let r = match cmd {
+                FenceCmd::Relaunch { singer, task } => fence::relaunch(&a, &singer, &task),
+                FenceCmd::Close { task } => fence::close(&a, &task),
+            };
+            exit_on(r, "fence", 6);
+        }
         other => println!(
             "{other:?}: not yet implemented; see the technical specification §14 for its milestone"
         ),
